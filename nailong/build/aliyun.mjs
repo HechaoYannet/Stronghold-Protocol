@@ -58,6 +58,28 @@ export function resolveKey({ repoRoot, layerDir } = {}) {
   return { key: null, from: null };
 }
 
+/** 探活：GET /models 是**免费的元数据查询，不消耗额度**。 */
+export async function probe({ key, base } = {}) {
+  const b = (base || process.env.ALIYUN_BASE_URL || DEFAULT_BASE).replace(/\/+$/, '');
+  const out = { base: b, authOk: false, models: [], error: null, note: null };
+  try {
+    const r = await fetch(b + '/compatible-mode/v1/models', { headers: { Authorization: 'Bearer ' + key }, signal: AbortSignal.timeout(30000) });
+    const t = await r.text();
+    let j = null; try { j = JSON.parse(t); } catch { /* ignore */ }
+    if (r.status !== 200) { out.error = `HTTP ${r.status} ${j?.code ? j.code + ': ' : ''}${j?.message || t.slice(0, 160)}`; return out; }
+    out.authOk = true;
+    out.models = (j?.data ?? []).map((m) => m.id).filter(Boolean).sort();
+    out.hasMore = j?.has_more === true;
+    // 白名单里有、但 /models 没列的，单独提示 —— 百炼的列表常常不全，能不能用只有真调一次才知道
+    const listed = new Set(out.models);
+    out.allowlistedNotListed = ALLOWED_MODELS.filter((m) => !listed.has(m));
+    return out;
+  } catch (e) {
+    out.error = e.name + ': ' + ((e.cause && (e.cause.code || e.cause.message)) || e.message);
+    return out;
+  }
+}
+
 /** 本地图 → data URI（官方支持 data:{MIME};base64,{data}）。 */
 function dataUri(abs) {
   const ext = path.extname(abs).toLowerCase();

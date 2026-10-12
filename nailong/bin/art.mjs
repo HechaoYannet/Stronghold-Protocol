@@ -493,30 +493,54 @@ async function cmdGenerate(flags) {
 
 async function cmdProbe(flags) {
   const layer = loadLayer();
-  const sf = await import('../build/siliconflow.mjs');
-  const { key, from } = sf.resolveKey({ repoRoot: layer.repoRoot, layerDir: layer.layerDir });
+  // 支持 aliyun 与 siliconflow 两个 provider；不指定就选配置了 key 的那个（aliyun 优先）
+  const mods = { aliyun: await import('../build/aliyun.mjs'), siliconflow: await import('../build/siliconflow.mjs') };
+  const ctx = { repoRoot: layer.repoRoot, layerDir: layer.layerDir };
+  const pick = () => {
+    if (flags.provider) return flags.provider;
+    if (mods.aliyun.resolveKey(ctx).key) return 'aliyun';
+    if (mods.siliconflow.resolveKey(ctx).key) return 'siliconflow';
+    return 'aliyun';
+  };
+  const name = pick();
+  const mod = mods[name];
+  if (!mod) { console.error(C.bad + `未知 provider "${name}"（aliyun | siliconflow）` + C.off); process.exit(2); }
+  const { key, from } = mod.resolveKey(ctx);
   console.log('');
-  console.log(C.hi + 'SiliconFlow 探活' + C.off);
+  console.log(C.hi + `${name} 探活` + C.off + dim('   （GET /models 是免费元数据，不消耗额度）'));
   console.log('  key 来源  ' + (from ?? '(没有找到 key)'));
   if (!key) {
-    console.log(C.bad + '\n没有 key。设 $env:SF_API_KEY，或写进 nailong/.env。' + C.off);
+    console.log(C.bad + '\n没有 key。写进 nailong/.env（' + (name === 'aliyun' ? 'ALIYUN_API_KEY' : 'SF_API_KEY') + '=…），或设同名环境变量。' + C.off);
     process.exit(2);
   }
-  const r = await sf.probe({ key });
+  const r = await mod.probe({ key });
   if (!r.authOk) {
     console.log(C.bad + '\n✗ 鉴权失败：' + r.error + C.off);
-    console.log('  接口本身是通的（能拿到服务端返回），问题在这个 key 上：');
-    console.log('   · 到 https://cloud.siliconflow.cn → 账户管理 → API 密钥 重新复制或新建一个');
-    console.log('   · 确认账号有余额（多数生图模型要扣费，余额为 0 会另报错误码）');
+    console.log('  接口本身是通的（能拿到服务端返回），问题在这个 key 上。');
     process.exit(1);
   }
   console.log(C.ok + '\n✓ 鉴权通过' + C.off);
-  console.log(`  可用生图模型 ${r.imageModels.length} 个：`);
-  for (const m of r.imageModels.slice(0, 40)) {
-    console.log('   ' + (sf.modelSupportsRef(m) ? C.ok + '★' + C.off : ' ') + ' ' + m + (sf.modelSupportsRef(m) ? dim('  支持参考图（可做 img2img / 图集）') : ''));
+  if (name === 'aliyun') {
+    console.log(`  endpoint  ${r.base}`);
+    console.log(`  列出的模型 ${r.models.length} 个${r.hasMore ? '（还有更多）' : '（has_more=false）'}：`);
+    for (const m of r.models) {
+      const okMod = mod.ALLOWED_MODELS.includes(m);
+      console.log('   ' + (okMod ? C.ok + '★' + C.off : ' ') + ' ' + m + (okMod ? dim('  已在白名单，可做换皮') : ''));
+    }
+    const missing = r.allowlistedNotListed ?? [];
+    if (missing.length) {
+      console.log('\n  ' + C.warn + '白名单里但 /models 没列出的：' + C.off);
+      for (const m of missing) console.log('   ? ' + m);
+      console.log('  ' + dim('百炼的 /models 常常不全；能不能用只有真调一次才知道 —— 而真调会计费，所以先问人。'));
+    }
+    console.log('\n  ' + dim('★ = 已在白名单（nailong/build/aliyun.mjs ALLOWED_MODELS）'));
+  } else {
+    console.log(`  可用生图模型 ${r.imageModels.length} 个：`);
+    for (const m of r.imageModels.slice(0, 40)) {
+      console.log('   ' + (mod.modelSupportsRef(m) ? C.ok + '★' + C.off : ' ') + ' ' + m);
+    }
+    if (r.imageModels.length > 40) console.log(`   … 另外 ${r.imageModels.length - 40} 个`);
   }
-  if (r.imageModels.length > 40) console.log(`   … 另外 ${r.imageModels.length - 40} 个`);
-  console.log('\n  ' + dim('★ = 支持 image 参考图，换皮请优先用它（Qwen-Image-Edit 系列）'));
 }
 
 // -------------------------------------------------------------------------------- spine
