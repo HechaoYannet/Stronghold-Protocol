@@ -114,7 +114,12 @@ export function verifyIsolation({ layer, log = console.log } = {}) {
     .split('\0').filter(Boolean)
     .map((e) => e.slice(3))
     .filter((p) => !isAllowed(p) && !p.startsWith('nailong/'));
-  return { ok: violations.length === 0 && dirty.length === 0, ref, base, changed: lines.length, violations, dirty };
+  // 已知且无害的一种脏：上游的素材工具每次跑完都会重算 data/assets.json 的 stats.bytes。
+  // 仍然算越界（不允许悄悄放过），但给出可操作的一句话。
+  const hints = dirty.includes('data/assets.json')
+    ? ['data/assets.json 是上游 tools/fetch-assets.mjs 重写的（只差 stats.bytes 这类统计值）；本层不该持有它的差异，还原即可：git checkout -- data/assets.json']
+    : [];
+  return { ok: violations.length === 0 && dirty.length === 0, ref, base, changed: lines.length, violations, dirty, hints };
 }
 
 // ---- 子命令 -----------------------------------------------------------------------------------------
@@ -183,7 +188,8 @@ async function cmdDoctor() {
   const iso = verifyIsolation({ layer });
   if (iso.ref) {
     check(iso.ok, `隔离守卫：相对 ${iso.ref} 有 ${iso.changed} 处改动，全部是允许范围内的新增`,
-      iso.violations.length ? 'node nailong/bin/nailong.mjs verify' : undefined);
+      iso.violations.length ? 'node nailong/bin/nailong.mjs verify' : (iso.dirty.length ? 'node nailong/bin/nailong.mjs verify' : undefined));
+    for (const h of iso.hints ?? []) lines.push(dim('  💡 ' + h));
   }
 
   console.log(`\n${C.hi}奶戍协议 · 定制层 doctor${C.off}  ${dim(layer.cfg.title ?? '')}\n`);
@@ -207,6 +213,7 @@ function cmdVerify() {
     console.log(warn(`\n工作区有 ${r.dirty.length} 个未提交的越界改动：`));
     for (const d of r.dirty) console.log('    ' + d);
   }
+  for (const h of r.hints ?? []) console.log(dim('\n  💡 ' + h));
   if (r.ok) console.log(ok('\n没有任何上游文件被改动 —— 非侵入性成立。'));
   else { console.log('\n' + bad('非侵入性被破坏：把改动挪回 nailong/ 下（或用数据补丁 / 文本覆盖表达）。')); process.exitCode = 1; }
 }

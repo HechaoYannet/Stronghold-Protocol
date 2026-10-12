@@ -220,8 +220,21 @@ foreach ($store in @('Cert:\LocalMachine\Root','Cert:\CurrentUser\Root')) {
 }
 Set-Content .cache/win-ca-bundle.pem $sb.ToString() -Encoding ascii
 $env:NODE_EXTRA_CA_CERTS = "$PWD\.cache\win-ca-bundle.pem"
-node tools/fetch-assets.mjs --concurrency=32
+$env:SP_GITHUB_PROXY      = "https://ghproxy.net/"     # 直连 raw.githubusercontent 超时时用
+node tools/fetch-assets.mjs --asset-source=mirror --concurrency=8
 ```
+
+**跑完把上游清单还原**：素材工具每次都会重算 `data/assets.json` 的 `stats.bytes`，
+于是这个**上游文件**会被改动（实测只差这一个数字，条目一个没变）。本层不该持有它的差异：
+
+```bash
+git checkout -- data/assets.json
+```
+
+`verify` 会把这种脏判为越界并打出这条补救命令 —— 严格是故意的，免得真正的误改混过去。
+
+> 关于「会丢条目」的报错：上游有防缩水保护（ASSETS.md）。若下载不完整，它会**拒绝**重写清单并退出 1，
+> 而不是把已提交的清单改小。按提示重跑即可；确认是网络问题就 `--allow-shrink`。
 
 ---
 
