@@ -164,6 +164,22 @@ node nailong/bin/art.mjs ingest                        # 收料（尺寸/透明�
   `wan2.7-*` 用 `input.messages` + `parameters`。代码里按模型自动分支，不要手工混用。
 - **参考图支持 base64**（`data:image/png;base64,…`），所以本地文件可以直接发，不需要先传图床。
 
+### 两条实测出来的硬约束（踩过才知道）
+
+| 约束 | 说明 | 本层怎么处理 |
+|---|---|---|
+| **参考图短边 ≥ 240px** | 游戏里头像 180×180、立绘 180×360 **全都低于下限**，直接送会被 `InvalidParameter` 拒掉 | 发送前自动等比放大到短边 ≥ `--ref-min`（默认 512），缓存在 `art/work/refprep/` |
+| **最后一张参考图决定输出宽高比** | 官方文档原话：*the output aspect ratio matches the input image (the last one if multiple images are input)* | 参考图顺序固定为 `[…--ref-extra, 原图]` ——**要保住构图的那张排最后** |
+
+> 踩坑记录：换脸测试第一次输出成了 2089×2007 近正方，就是因为把奶龙参考图（284×273）放在了最后。
+
+### 实测结论（这个账号）
+
+| 模型 | 结果 |
+|---|---|
+| `wan2.7-image` | ✅ **可用**。11 秒出图，接受 base64 参考图，多图参考可用 |
+| `qwen-image-3.0-pro` | ❌ `HTTP 400 url error`（错误码文档 Cause 1：模型与 endpoint 不匹配）。`/models` 也确实没列它 —— 大概率这个 workspace 没开通。**失败不计费** |
+
 ### 额度闸门（三层，都在 `art.mjs generate` 里）
 
 1. **没有 `--yes` 就绝不发请求**（仅对计费 provider）。默认只做到 dry-run 那一步。

@@ -337,9 +337,8 @@ async function cmdGenerate(flags) {
     aliyun: {
       label: '阿里云百炼（Model Studio / Token Plan）', mod: await import('../build/aliyun.mjs'),
       keyEnv: 'ALIYUN_API_KEY', hint: 'ALIYUN_API_KEY（写进 nailong/.env，已被 .gitignore 忽略）',
-      // 万相用 1K/2K 档位；qwen-image 用 W*H 像素串 —— 交给模块自己判断
-      pickSize: (t) => (String(process.env.ALIYUN_MODEL ?? '').startsWith('wan')
-        ? '2K' : sf.pickSize(t.info?.width, t.info?.height)),
+      // 万相用 1K/2K 档位；qwen-image 用 WxH 像素串 —— 按实际模型判断
+      pickSize: (t, mdl) => (String(mdl ?? '').startsWith('wan') ? '2K' : sf.pickSize(t.info?.width, t.info?.height)),
       metered: true,
     },
     siliconflow: {
@@ -391,6 +390,38 @@ async function cmdGenerate(flags) {
   }
   const batch = todo.slice(0, count);
 
+  // --ref-extra：附加参考图（逗号分隔）。换脸这类"拿 A 的脸贴到 B 身上"需要第二张参考图。
+  const extras = String(flags['ref-extra'] ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+    .map((p) => {
+      const abs = path.isAbsolute(p) ? p : path.join(layer.repoRoot, p);
+      if (!fs.existsSync(abs)) { console.error(C.bad + '附加参考图不存在：' + abs + C.off); process.exit(2); }
+      return abs;
+    });
+  // --prompt：覆盖 style.json 里按分类生成的提示词（一次性试验用）
+  const promptOverride = typeof flags.prompt === 'string' && flags.prompt ? flags.prompt : null;
+
+  // 参考图预处理：**模型的硬性下限是短边 ≥240px**，而游戏素材只有 180 —— 不放大会被直接拒。
+  // 统一放大到短边 ≥ REF_MIN（默认 512，留足余量），产物缓存在 art/work/refprep/。
+  const REF_MIN = Number(flags['ref-min'] ?? 512);
+  const refPrepDir = path.join(layer.layerDir, 'art/work/refprep');
+  const prepRef = (abs) => {
+    const out = path.join(refPrepDir, path.basename(abs));
+    let need = true;
+    try { need = fs.statSync(out).mtimeMs < fs.statSync(abs).mtimeMs; } catch { need = true; }
+    if (need) {
+      ensureDir(path.dirname(out));
+      py(['ensure-ref', '--src', abs, '--out', out, '--min', String(REF_MIN)], { quiet: true });
+    }
+    return out;
+  };
+  if (extras.length) {
+    const cap = sf.maxRefImages ? sf.maxRefImages(model) : 1;
+    if (useRef && 1 + extras.length > cap) {
+      console.error(C.bad + `${model} 最多 ${cap} 张参考图，现在是 1（原图）+ ${extras.length}（--ref-extra）` + C.off);
+      process.exit(2);
+    }
+  }
+
   console.log('');
   console.log(C.hi + P.label + ' 生成' + C.off);
   console.log(`  key      ${key.slice(0, 6)}…${key.slice(-4)}（来自 ${from}）`);
@@ -401,16 +432,17 @@ async function cmdGenerate(flags) {
 
   // dry-run 先于额度总闸：它不发任何请求，所以不需要 --yes
   if (flags['dry-run']) {
-    const sizeOf = P.pickSize;
+    const sizeOf = (t) => P.pickSize(t, model);
     for (const t of batch.slice(0, 10)) console.log(`  · ${t.id}  → ${sizeOf(t)}`);
     if (batch.length > 10) console.log(`  … 另外 ${batch.length - 10} 个`);
     // 把**真实会发出去的请求体**打出来（参考图用占位符代替，避免刷屏）
     if (typeof sf.buildRequest === 'function' && batch[0]) {
       const t = batch[0];
       try {
+        // ★ 预览必须与真实调用**完全一致**，否则就是骗人：这里和 worker 用同一套参数
         const req = sf.buildRequest({
-          model, prompt: t.prompt, negative: plan.style.negative,
-          refPaths: useRef ? [t.src] : [], size: sizeOf(t),
+          model, prompt: promptOverride ?? t.prompt, negative: plan.style.negative,
+          refPaths: [...extras.map(prepRef), ...(useRef ? [prepRef(t.src)] : [])], size: sizeOf(t),
           seed: flags.seed != null ? Number(flags.seed) : undefined,
         }, { summarize: true });
         console.log('\n  实际请求（以第一个目标为例，参考图已省略）');
@@ -442,14 +474,17 @@ async function cmdGenerate(flags) {
   async function worker() {
     while (cursor < batch.length) {
       const t = batch[cursor++];
-      const size = P.pickSize(t);
+      const size = P.pickSize(t, model);
       const out = path.join(workOut, ...t.rel.split('/'));
       try {
         const r = await withRetry(() => sf.generateImage({
-          key, model, prompt: t.prompt, negative: plan.style.negative,
+          key, model,
+          prompt: promptOverride ?? t.prompt, negative: plan.style.negative,
           // 阿里云收 refPaths（数组），SiliconFlow 收 refPath（单个）—— 两个都给，各自取用
-          refPath: useRef ? t.src : undefined,
-          refPaths: useRef ? [t.src] : [],
+          refPath: useRef ? prepRef(t.src) : undefined,
+          // ★ 顺序有语义：**最后一张参考图决定输出宽高比**（官方文档）。
+          //   要保住原图构图，原图就必须排在附加参考图之后。
+          refPaths: [...extras.map(prepRef), ...(useRef ? [prepRef(t.src)] : [])],
           size,
           steps: flags.steps != null ? Number(flags.steps) : undefined,
           guidance: flags.guidance != null ? Number(flags.guidance) : undefined,

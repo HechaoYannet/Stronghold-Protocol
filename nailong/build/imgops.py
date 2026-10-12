@@ -400,6 +400,29 @@ def cmd_atlas_verify(args):
          "pageSizeA": pa["fields"].get("size"), "pageSizeB": pb["fields"].get("size")})
 
 
+# ------------------------------------------------------------------------- ensure-ref
+def cmd_ensure_ref(args):
+    """把参考图准备到可送模型的尺寸：短边不足 min 就等比放大（LANCZOS），并统一存成 PNG。
+
+    实测约束：wan2.7-image / qwen-image 都要求参考图**至少 240x240**，
+    而游戏里的头像 180x180、立绘 180x360 全都低于下限 —— 不放大就会被
+    InvalidParameter 挡回来。
+    """
+    im = Image.open(args.src).convert("RGBA")
+    w, h = im.size
+    short = min(w, h)
+    if short >= args.min:
+        out_im, scaled = im, 1.0
+    else:
+        scale = args.min / short
+        out_im = im.resize((max(1, round(w * scale)), max(1, round(h * scale))), Image.LANCZOS)
+        scaled = scale
+    os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+    out_im.save(args.out, "PNG", optimize=True)
+    out({"out": args.out, "from": [w, h], "to": list(out_im.size), "scale": round(scaled, 3),
+         "upscaled": scaled != 1.0})
+
+
 # ---------------------------------------------------------------------------- fixture
 def cmd_fixture(args):
     """生成一对合成的 图集+PNG，用于 atlas-unpack/pack 的往返自测（不依赖任何游戏素材）。"""
@@ -468,6 +491,11 @@ def main():
     p.add_argument("--atlas-a", required=True); p.add_argument("--png-a", required=True)
     p.add_argument("--atlas-b", required=True); p.add_argument("--png-b", required=True)
     p.set_defaults(fn=cmd_atlas_verify)
+
+    p = sub.add_parser("ensure-ref")
+    p.add_argument("--src", required=True); p.add_argument("--out", required=True)
+    p.add_argument("--min", type=int, default=512)
+    p.set_defaults(fn=cmd_ensure_ref)
 
     p = sub.add_parser("fixture")
     p.add_argument("--outdir", required=True)

@@ -32,15 +32,24 @@ export const isQwen = (model) => QWEN_MODELS.includes(model);
 export const isWan = (model) => WAN_MODELS.includes(model);
 
 export const modelSupportsRef = (model) => ALLOWED_MODELS.includes(model); // 两族都支持 I2I
+/** 输出总像素需在 512²–2048² 之间；按目标宽高比挑一个方正的档位。返回 "WxH"（OpenAI 协议写法）。 */
 export const pickSize = (w, h) => {
-  // 输出总像素需在 512²–2048² 之间；这里按目标宽高比挑一个方正的档位
   const ratio = w && h ? w / h : 1;
   const area = 1024 * 1024;
   const rh = Math.round(Math.sqrt(area / ratio) / 16) * 16;
   const rw = Math.round((rh * ratio) / 16) * 16;
   const clamp = (v) => Math.max(512, Math.min(2048, v));
-  return clamp(rw) + '*' + clamp(rh);
+  return clamp(rw) + 'x' + clamp(rh);
 };
+
+/**
+ * ★ size 分隔符两种协议**不同**（官方文档 Warning）：
+ *   OpenAI 兼容 → "1024x1024"（字母 x）
+ *   DashScope   → "1024*1024"（星号）
+ * 写错会拿到一个和 size 毫无关系的报错（实测：url error, please check url！）。
+ */
+const toOpenAiSize = (s) => String(s ?? '').replace('*', 'x');
+const toDashScopeSize = (s) => String(s ?? '').replace('x', '*');
 
 export function resolveKey({ repoRoot, layerDir } = {}) {
   for (const env of ['ALIYUN_API_KEY', 'DASHSCOPE_API_KEY']) {
@@ -139,7 +148,7 @@ export function buildRequest(opts, { summarize = false } = {}) {
       model, prompt, n: 1, watermark: opts.watermark === true,
       prompt_extend: opts.promptExtend !== false,
       ...(opts.seed != null ? { seed: opts.seed } : {}),
-      ...(opts.size ? { size: opts.size } : {}),
+      ...(opts.size ? { size: toOpenAiSize(opts.size) } : {}),
     };
     if (refs.length === 1) body.image = img(refs[0]);
     else if (refs.length > 1) body.image = refs.map(img);
@@ -151,7 +160,7 @@ export function buildRequest(opts, { summarize = false } = {}) {
   const content = [...refs.map((p) => ({ image: img(p) })), { text: prompt }];
   return {
     url: base + '/api/v1/services/aigc/multimodal-generation/generation',
-    body: { model, input: { messages: [{ role: 'user', content }] }, parameters: { size: opts.size || '2K', n: 1, watermark: opts.watermark === true, ...(opts.seed != null ? { seed: opts.seed } : {}) } },
+    body: { model, input: { messages: [{ role: 'user', content }] }, parameters: { size: toDashScopeSize(opts.size || '2K'), n: 1, watermark: opts.watermark === true, ...(opts.seed != null ? { seed: opts.seed } : {}) } },
     refCount: refs.length, protocol: 'dashscope-native',
   };
 }
