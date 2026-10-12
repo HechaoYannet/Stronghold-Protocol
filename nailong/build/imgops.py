@@ -400,6 +400,54 @@ def cmd_atlas_verify(args):
          "pageSizeA": pa["fields"].get("size"), "pageSizeB": pb["fields"].get("size")})
 
 
+# --------------------------------------------------------------------------- flatten
+def cmd_flatten(args):
+    """把带透明通道的图压平到纯色底上再送模型。
+
+    为什么要这一步：ComfyUI 的 LoadImage 把 PNG 当 RGB 读，**透明区域会变成无信号的黑块**，
+    扩散模型就会在那片区域自由发挥 —— 实测表现为满屏彩虹扫描线噪点。
+    送模型前压平、拿回来后再把原 alpha 贴回去，噪点问题消失。
+    """
+    im = Image.open(args.src).convert("RGBA")
+    bg = args.bg
+    if bg == "white":
+        color = (255, 255, 255, 255)
+    elif bg == "black":
+        color = (0, 0, 0, 255)
+    elif bg == "gray":
+        color = (127, 127, 127, 255)
+    else:
+        h = bg.lstrip("#")
+        color = (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), 255)
+    canvas = Image.new("RGBA", im.size, color)
+    canvas.alpha_composite(im)
+    os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+    canvas.convert("RGB").save(args.out, "PNG")
+    alpha = im.getchannel("A")
+    out({"out": args.out, "size": list(im.size), "bg": bg,
+         "opaquePct": round(sum(1 for v in alpha.getdata() if v > 8) / (im.width * im.height) * 100, 1)})
+
+
+# ----------------------------------------------------------------------- restore-alpha
+def cmd_restore_alpha(args):
+    """只取生成图的 RGB，alpha 用原图的 —— 保住透明背景，同时把生成图裁回原尺寸/原构图。"""
+    gen = Image.open(args.gen).convert("RGB")
+    src = Image.open(args.src).convert("RGBA")
+    if gen.size != src.size:
+        sw, sh = src.size
+        scale = max(sw / gen.width, sh / gen.height)
+        nw, nh = max(1, round(gen.width * scale)), max(1, round(gen.height * scale))
+        r = gen.resize((nw, nh), Image.LANCZOS)
+        canvas = Image.new("RGB", (sw, sh), (0, 0, 0))
+        canvas.paste(r, ((sw - nw) // 2, (sh - nh) // 2))
+        gen = canvas
+    result = gen.convert("RGBA")
+    result.putalpha(src.getchannel("A"))
+    os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+    result.save(args.out, "PNG", optimize=True)
+    out({"out": args.out, "size": list(result.size), "resized": gen.size != src.size})
+
+
 # ------------------------------------------------------------------------- composite
 def cmd_composite(args):
     """局部合成：只把 --over 的指定区域贴到 --base 上，其余像素**保证与原图逐位一致**。
@@ -581,6 +629,14 @@ def main():
     p.add_argument("--atlas-a", required=True); p.add_argument("--png-a", required=True)
     p.add_argument("--atlas-b", required=True); p.add_argument("--png-b", required=True)
     p.set_defaults(fn=cmd_atlas_verify)
+
+    p = sub.add_parser("flatten")
+    p.add_argument("--src", required=True); p.add_argument("--out", required=True); p.add_argument("--bg", default="white")
+    p.set_defaults(fn=cmd_flatten)
+
+    p = sub.add_parser("restore-alpha")
+    p.add_argument("--gen", required=True); p.add_argument("--src", required=True); p.add_argument("--out", required=True)
+    p.set_defaults(fn=cmd_restore_alpha)
 
     p = sub.add_parser("composite")
     p.add_argument("--base", required=True); p.add_argument("--over", required=True); p.add_argument("--out", required=True)
