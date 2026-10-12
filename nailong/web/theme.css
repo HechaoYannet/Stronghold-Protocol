@@ -1,0 +1,43 @@
+/* nailong/web/theme.css — 奶龙主题：只覆盖 public/css/theme.css 的 CSS 变量 + 少量定向规则。
+   本文件在 index.html 的原生样式之后加载，同权重下后者胜；再加 html[data-nailong="on"] 提高特异性，
+   所以不需要 !important，也不会污染上游样式。 */
+
+html[data-nailong='on'] {
+  /* —— 主色：把上游的薄荷绿换成奶龙黄 —— */
+  --mint-500: #ffd23f;
+  --mint-400: #ffe066;
+  --mint-600: #f5b800;
+  --mint-glow: #ffdf5c;
+  --mint-700: #b98600;
+  --mint-800: #6b4d00;
+  --mint-900: #2e2200;
+  --mint-a10: rgba(255, 210, 63, .10);
+  --mint-a20: rgba(255, 210, 63, .20);
+  --mint-a35: rgba(255, 210, 63, .35);
+  --text-on-mint: #2a1c00;
+
+  /* —— 底色：从冷灰挪到暖褐 —— */
+  --bg-0: #12100a;
+  --bg-1: #1a1710;
+  --bg-2: #241f14;
+  --bg-3: #2d2718;
+  --bg-4: #38301d;
+  --bg-glass: rgba(22, 19, 12, .82);
+  --line: #3a3220;
+  --line-2: #4b4129;
+  --line-3: #6a5c3a;
+
+  /* —— 辅色 —— */
+  --gold: #ffb703;
+  --amber: #ff9e2c;
+  --orange: #ff7a1a;
+  --orange-hi: #ff9840;
+
+  /* —— 稀有度：让 6★ 更暖 —— */
+  --tier-5: #ffc300;
+  --tier-6: #ff8a00;
+}
+
+/* 标题页：奶龙层启用时的一点点体温（不改变布局，只改观感）。 */
+html[data-nailong='on'] .boot__text { letter-spacing: .18em; }
+html[data-nailong='on'] .boot__hex { background: var(--mint-500); box-shadow: 0 0 24px var(--mint-a35); }

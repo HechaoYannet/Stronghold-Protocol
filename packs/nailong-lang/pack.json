@@ -1,0 +1,19 @@
+{
+  "id": "nailong-lang",
+  "type": "lang",
+  "lang": "zh-nailong",
+  "name": "奶龙语",
+  "englishName": "Nailong",
+  "version": "0.1.0",
+  "app": ">=0.2.5 <0.3.0",
+  "authors": [
+    "奶龙定制层"
+  ],
+  "license": "CC-BY-NC-4.0",
+  "base": null,
+  "fallback": [],
+  "files": {
+    "ui": "ui.json",
+    "data": "data.json"
+  }
+}

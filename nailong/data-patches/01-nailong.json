@@ -1,0 +1,19 @@
+{
+  "$comment": "声明式数据补丁：作用于 data/*.json，由 nailong build 生成打过补丁的 gen/data/。op: set | merge | push | delete；path 点号分隔，数字段=数组下标。★这里只改「结构与数值」，改文案请用 nailong/text/game-texts.json（那条通道带哈希校验）。",
+  "patches": [
+    {
+      "file": "config.json",
+      "note": "示例：给「玩法说明」加一条奶龙提示（数组 push，纯附加，不动任何既有数据）。",
+      "ops": [
+        {
+          "op": "push",
+          "path": "tips",
+          "value": {
+            "tip": "奶龙提示：整备区别忘了给奶龙配装备。",
+            "weight": 50
+          }
+        }
+      ]
+    }
+  ]
+}

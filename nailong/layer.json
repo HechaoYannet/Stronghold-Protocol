@@ -1,0 +1,34 @@
+{
+  "$comment": "奶戍协议 · 奶龙定制层 —— 非侵入式定制的唯一清单。所有键都是相对的；路径相对本文件所在目录。改完运行 node nailong/bin/nailong.mjs build。",
+  "layer": "nailong",
+  "title": "奶戍协议 · 奶龙盟约",
+  "version": "0.1.0",
+  "app": ">=0.2.5 <0.3.0",
+  "defaultLang": "zh-nailong",
+  "langPack": {
+    "id": "nailong-lang",
+    "lang": "zh-nailong",
+    "name": "奶龙语",
+    "englishName": "Nailong",
+    "authors": [
+      "奶龙定制层"
+    ],
+    "license": "CC-BY-NC-4.0",
+    "numberUnits": [
+      "万",
+      "亿"
+    ],
+    "fallback": []
+  },
+  "sim": {
+    "specWrapper": true,
+    "kitsDir": "content/kits",
+    "installsDir": "content/installs",
+    "metaDir": "content/meta"
+  },
+  "dataPatchesDir": "data-patches",
+  "assetMirrorDir": "assets",
+  "webDir": "web",
+  "injectHtml": "host/inject.html",
+  "generatedDir": "gen"
+}
