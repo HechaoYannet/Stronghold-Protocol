@@ -400,6 +400,96 @@ def cmd_atlas_verify(args):
          "pageSizeA": pa["fields"].get("size"), "pageSizeB": pb["fields"].get("size")})
 
 
+# ------------------------------------------------------------------------- composite
+def cmd_composite(args):
+    """局部合成：只把 --over 的指定区域贴到 --base 上，其余像素**保证与原图逐位一致**。
+
+    这是「只换脸」最可靠的做法：不管生成模型把整张图重画成什么样、输出什么尺寸，
+    最终落地的图 = 原图 + 生成图的脸部区域。构图漂移问题从根上消失。
+
+    --mask-ellipse cx,cy,rx,ry   归一化坐标的椭圆遮罩（默认 0.5,0.22,0.20,0.18）
+    --mask PNG                   或者给一张蒙版图（白=取生成图，黑=保留原图）
+    --feather N                  边缘羽化像素（默认 6，让接缝不硬）
+    """
+    base = Image.open(args.base).convert("RGBA")
+    over = Image.open(args.over).convert("RGBA")
+    if over.size != base.size:
+        # 生成图尺寸通常和原图不同：先 cover 缩放到原图尺寸，再按比例映射遮罩
+        sw, sh = base.size
+        scale = max(sw / over.width, sh / over.height)
+        nw, nh = max(1, round(over.width * scale)), max(1, round(over.height * scale))
+        r = over.resize((nw, nh), Image.LANCZOS)
+        canvas = Image.new("RGBA", base.size, (0, 0, 0, 0))
+        canvas.paste(r, ((sw - nw) // 2, (sh - nh) // 2))
+        over = canvas
+        scaled_note = "cover->%dx%d" % (sw, sh)
+    else:
+        scaled_note = "same-size"
+
+    W, H = base.size
+    if args.mask:
+        m = Image.open(args.mask).convert("L").resize((W, H), Image.LANCZOS)
+    else:
+        cx, cy, rx, ry = [float(v) for v in args.mask_ellipse.split(",")]
+        m = Image.new("L", (W, H), 0)
+        ImageDraw.Draw(m).ellipse(
+            [int((cx - rx) * W), int((cy - ry) * H), int((cx + rx) * W), int((cy + ry) * H)], fill=255)
+    if args.feather > 0:
+        m = m.filter(ImageFilter.GaussianBlur(args.feather))
+
+    out_im = Image.composite(over, base, m)
+    os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+    out_im.save(args.out, "PNG", optimize=True)
+    # 报告实际改动的像素比例，便于判断遮罩是否合理
+    hist = m.histogram()
+    touched = sum(hist[8:])
+    out({"out": args.out, "size": [W, H], "resize": scaled_note,
+         "maskCoveragePct": round(touched / (W * H) * 100, 2), "feather": args.feather})
+
+
+# --------------------------------------------------------------------------- compare
+def cmd_compare(args):
+    """带标签的 N 图并排对比（可选放大某个区域），用来判断换脸/换皮的融合质量。
+
+    imgops.py compare --out O --item "标签=路径" --item "标签=路径" [--height 620] [--zoom x,y,w,h]
+    --zoom 用**归一化**坐标（0~1，相对每张图自身），方便把脸放大到同一尺度细看。
+    """
+    items = []
+    for spec in args.item:
+        if "=" not in spec:
+            sys.stderr.write("--item 形如 标签=路径\n")
+            sys.exit(2)
+        label, p = spec.split("=", 1)
+        if not os.path.exists(p):
+            sys.stderr.write("找不到 %s\n" % p)
+            sys.exit(2)
+        im = Image.open(p).convert("RGBA")
+        if args.zoom:
+            zx, zy, zw, zh = [float(v) for v in args.zoom.split(",")]
+            W, H = im.size
+            im = im.crop((int(zx * W), int(zy * H), int((zx + zw) * W), int((zy + zh) * H)))
+        items.append((label, im, Image.open(p).size))
+
+    H = args.height
+    fitted = []
+    for label, im, orig in items:
+        r = H / im.height
+        fitted.append((label, im.resize((max(1, int(im.width * r)), H), Image.LANCZOS), orig))
+
+    pad, top = 12, 30
+    total_w = sum(f[1].width for f in fitted) + pad * (len(fitted) + 1)
+    sheet = Image.new("RGBA", (total_w, H + top + pad), (26, 24, 20, 255))
+    d = ImageDraw.Draw(sheet)
+    x = pad
+    for label, im, orig in fitted:
+        sheet.alpha_composite(im, (x, top))
+        d.text((x, 9), "%s   %dx%d" % (label, orig[0], orig[1]), fill=(255, 220, 80, 255))
+        x += im.width + pad
+    os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+    sheet.save(args.out, "PNG")
+    out({"out": args.out, "size": list(sheet.size), "items": len(fitted)})
+
+
 # ------------------------------------------------------------------------- ensure-ref
 def cmd_ensure_ref(args):
     """把参考图准备到可送模型的尺寸：短边不足 min 就等比放大（LANCZOS），并统一存成 PNG。
@@ -491,6 +581,19 @@ def main():
     p.add_argument("--atlas-a", required=True); p.add_argument("--png-a", required=True)
     p.add_argument("--atlas-b", required=True); p.add_argument("--png-b", required=True)
     p.set_defaults(fn=cmd_atlas_verify)
+
+    p = sub.add_parser("composite")
+    p.add_argument("--base", required=True); p.add_argument("--over", required=True); p.add_argument("--out", required=True)
+    p.add_argument("--mask"); p.add_argument("--mask-ellipse", default="0.5,0.22,0.20,0.18")
+    p.add_argument("--feather", type=int, default=6)
+    p.set_defaults(fn=cmd_composite)
+
+    p = sub.add_parser("compare")
+    p.add_argument("--out", required=True)
+    p.add_argument("--item", action="append", required=True)
+    p.add_argument("--height", type=int, default=620)
+    p.add_argument("--zoom")
+    p.set_defaults(fn=cmd_compare)
 
     p = sub.add_parser("ensure-ref")
     p.add_argument("--src", required=True); p.add_argument("--out", required=True)
