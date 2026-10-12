@@ -164,6 +164,64 @@ node nailong/bin/art.mjs ingest                        # 收料（尺寸/透明�
   `wan2.7-*` 用 `input.messages` + `parameters`。代码里按模型自动分支，不要手工混用。
 - **参考图支持 base64**（`data:image/png;base64,…`），所以本地文件可以直接发，不需要先传图床。
 
+## 3.6 本地 ComfyUI 路线（推荐主力，零成本）
+
+本机已装 **ComfyUI Desktop 1.1.1**（内核 v0.37.1），常驻 `127.0.0.1:8188`，**Qwen-Image 2.1 int8 三件套已就位**
+（diffusion 6.76 GB + text encoder 8.71 GB + VAE 0.63 GB）。**本地推理，不产生任何 API 费用。**
+
+```bash
+node nailong/gen/comfy-test2.mjs          # 单张：压平 → 推理 → 还原 alpha
+node nailong/gen/comfy-nailong-base.mjs   # 方向实验：以奶龙为主体重绘
+```
+
+- 客户端：`nailong/build/comfyui.mjs`（上传 / 排队 / 轮询 / 取图）
+- 工作流：`nailong/build/comfyworkflow.mjs`（节点组合**照抄官方模板** `image_qwen_image_2_1_image_edit.json`，不自己发明）
+- 模型路径：`D:\Comfy-Desktop\ComfyUI-Shared\models`（安装目录下的 models 是空占位，别放错）
+
+### ★ 方向：以奶龙为主体 + 干员装扮（已验证，别走换脸）
+
+**换脸方向是错的**：奶龙是极简平面角色，干员立绘是厚涂日式插画，把前者塞进后者必然风格冲突——
+实测出来就是一张扁平黄色贴纸，怎么调提示词都在打补丁。
+
+**正确方向**：反过来，让**奶龙当主角**，把干员的装扮穿上去。
+
+| | 换脸（✗） | 奶龙为主体（✓） |
+|---|---|---|
+| 结果 | 扁平黄椭圆贴在脸上，结构对不上 | 奶龙戴上干员的长发/龙角/耳饰/挂饰，一眼认出是谁 |
+| 风格 | 冲突，无解 | 整张图统一是奶龙的语言 |
+| 覆盖范围 | 只能用于立绘/头像 | **全图重绘，能覆盖全部 3,258 张** |
+
+参考图顺序（语义固定）：**image1 = 干员原图**（决定构图/宽高比/装扮来源），**image2 = 奶龙参考图**（决定角色本体）。
+提示词模板见 [`nailong/art/style.json`](nailong/art/style.json) 的 `edit` 段。
+
+### 实测性能（RTX 5070 Laptop 8 GB 显存）
+
+| 步数 | 单张耗时 | 备注 |
+|---|---|---|
+| 8 步 | **37.8s** | 与 20 步画质几乎无差别 → **用 8 步** |
+| 12 步 | 37.8s | 已饱和 |
+| 20 步 | 62.0s | 每步约 2s，固定开销约 22s（每次重新加载模型） |
+
+**3,258 张 ≈ 34 小时**（8 步）。首次运行要额外 ~20s 加载 16 GB 模型。
+
+### ★ 透明通道必须处理，否则满屏彩虹噪点
+
+ComfyUI 的 `LoadImage` 把 PNG 当 RGB 读，**透明区域变成无信号区**，扩散模型就在那里自由发挥。
+实测表现为整个背景布满彩色扫描线。**送进去之前压平，拿回来再贴回原 alpha**：
+
+```bash
+python nailong/build/imgops.py flatten       --src 原图.png --out flat.png --bg white
+#   … 推理 …
+python nailong/build/imgops.py restore-alpha --gen 生成图.png --src 原图.png --out 结果.png
+```
+
+### 其它实测要点
+
+- **`resolution` 是总像素预算**，不是宽高。方形比例会自动换算（1:2 的图 + `resolution=1024` → 736×1440 的 latent），
+  **宽高比天然保持**，所以 `composite` 能对得上。
+- `cfg=1` 时 ComfyUI 跳过负向分支，负向提示词基本不起作用。
+- 输出尺寸 = 采样 latent 的尺寸，必须是 32 的倍数。要精确回原尺寸用 `restore-alpha`（内置按比例缩放）。
+
 ### 两条实测出来的硬约束（踩过才知道）
 
 | 约束 | 说明 | 本层怎么处理 |
