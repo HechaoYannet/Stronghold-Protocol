@@ -110,16 +110,22 @@ export function verifyIsolation({ layer, log = console.log } = {}) {
   }
   // -z：每个条目以 NUL 分隔，形如 "XY <path>"，没有引号也没有需要 trim 的前导空格。
   // （用换行分隔 + 整体 trim 会把**第一条**的 "XY " 前缀吃掉，把 nailong/... 变成 ailong/... —— 守卫会永远误报第一条。）
-  const dirty = gitRaw(['status', '--porcelain', '-z', '--no-renames'])
+  // 机器垃圾：某个程序把**未展开的环境变量占位符**当成字面路径，在当前目录下建了目录。
+  // 实测来源：搜狗输入法的表情组件会往 CWD 写一个字面名为 %SystemDrive% 的目录（内含 ProgramData\SogouInput\…）。
+  // 这类路径不可能是项目内容，所以**不计入越界**（但仍单独列出，方便顺手清掉，也免得守卫一直误报）。
+  const JUNK_RE = /^(%[A-Za-z_][A-Za-z0-9_]*%|\$[A-Za-z_][A-Za-z0-9_]*|\$\{[^}]+\})([\\/]|$)/;
+  const allDirty = gitRaw(['status', '--porcelain', '-z', '--no-renames'])
     .split('\0').filter(Boolean)
     .map((e) => e.slice(3))
     .filter((p) => !isAllowed(p) && !p.startsWith('nailong/'));
+  const junk = allDirty.filter((p) => JUNK_RE.test(p));
+  const dirty = allDirty.filter((p) => !JUNK_RE.test(p));
   // 已知且无害的一种脏：上游的素材工具每次跑完都会重算 data/assets.json 的 stats.bytes。
   // 仍然算越界（不允许悄悄放过），但给出可操作的一句话。
   const hints = dirty.includes('data/assets.json')
     ? ['data/assets.json 是上游 tools/fetch-assets.mjs 重写的（只差 stats.bytes 这类统计值）；本层不该持有它的差异，还原即可：git checkout -- data/assets.json']
     : [];
-  return { ok: violations.length === 0 && dirty.length === 0, ref, base, changed: lines.length, violations, dirty, hints };
+  return { ok: violations.length === 0 && dirty.length === 0, ref, base, changed: lines.length, violations, dirty, junk, hints };
 }
 
 // ---- 子命令 -----------------------------------------------------------------------------------------
@@ -212,6 +218,12 @@ function cmdVerify() {
   if (r.dirty.length) {
     console.log(warn(`\n工作区有 ${r.dirty.length} 个未提交的越界改动：`));
     for (const d of r.dirty) console.log('    ' + d);
+  }
+  if (r.junk?.length) {
+    console.log(dim(`\n  （另有 ${r.junk.length} 个机器垃圾，不计入越界：本机某个程序把未展开的环境变量当成了字面路径）`));
+    for (const j of r.junk) console.log(dim('    ' + j));
+    const first = r.junk[0].replace(/[\\/]+$/, ''); // git 给未跟踪目录加了尾斜杠，去掉
+    console.log(dim('    清掉即可：Remove-Item -LiteralPath "' + first + '" -Recurse -Force'));
   }
   for (const h of r.hints ?? []) console.log(dim('\n  💡 ' + h));
   if (r.ok) console.log(ok('\n没有任何上游文件被改动 —— 非侵入性成立。'));
