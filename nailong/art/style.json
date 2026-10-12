@@ -1,0 +1,56 @@
+{
+  "$comment": "奶龙化美术风格。改这里就能改变全局提示词。{subject} = 主角色名，{label} = 该素材对应的中文名，{style} = 下面这段全局风格，{negative} = 负面提示词。",
+  "subject": "奶龙",
+  "style": "Q版可爱卡通风格，粗而干净的外轮廓线，平涂赛璐璐上色，暖黄色主色调，圆润造型，柔和的高光，小尺寸下依然清晰可读",
+  "negative": "写实，照片，3D渲染，厚涂，阴暗，恐怖，暴力，文字，水印，签名，多手多脚，畸形，模糊，低对比度，复杂背景",
+  "classes": {
+    "portrait": {
+      "weight": 100,
+      "prompt": "{style}。角色半身立绘：{label}，拟人化为{subject}（黄色小奶龙）。竖构图，人物居中，透明或纯色背景，不要文字。"
+    },
+    "avatar": {
+      "weight": 95,
+      "prompt": "{style}。角色头像：{label}，拟人化为{subject}（黄色小奶龙）。正方形构图，头部特写，居中，透明或纯色背景，不要文字。"
+    },
+    "spine-page": {
+      "weight": 92,
+      "prompt": "{style}。Spine 骨骼动画的贴图集（{label}）：里面是同一个角色的各个身体部件（头、身体、手、武器、特效）。保持每个部件的轮廓与数量不变，只替换画风与配色为{subject}风格。部件之间不要互相渗透，不要改变部件的相对位置与大小。"
+    },
+    "skill": {
+      "weight": 75,
+      "prompt": "{style}。技能图标：{label}。方形图标，主体居中占画面 70%，简洁有力，无文字，深色背景上可读。"
+    },
+    "item": {
+      "weight": 68,
+      "prompt": "{style}。装备图标：{label}。方形图标，单个物件居中，无文字。"
+    },
+    "enemy-icon": {
+      "weight": 62,
+      "prompt": "{style}。敌人图标：{label}，{subject}化。方形图标，怪物/敌人半身，与干员头像保持同一画风。"
+    },
+    "token-avatar": {
+      "weight": 55,
+      "prompt": "{style}。召唤物头像：{label}，{subject}化。正方形，单位特写。"
+    },
+    "bond": {
+      "weight": 58,
+      "prompt": "{style}。阵营盟约徽记：{label}。单色或双色徽章，几何感，居中，无文字。"
+    },
+    "band": {
+      "weight": 58,
+      "prompt": "{style}。战术策略图标：{label}。方形徽章，图形化，无文字。"
+    },
+    "module": {
+      "weight": 45,
+      "prompt": "{style}。模组类型图标：{label}。小型符号化图标，单色系，无文字。"
+    },
+    "prof": {
+      "weight": 45,
+      "prompt": "{style}。职业图标：{label}。符号化图标，简洁几何，深色背景上可读。"
+    },
+    "ui": {
+      "weight": 35,
+      "prompt": "{style}。界面装饰精灵：{label}。保持在原有造型语言内，只做配色与质感替换，不要改变形状轮廓（界面元素改变轮廓会错位）。"
+    }
+  }
+}

@@ -1,0 +1,10 @@
+# char/avatar/char_010_chen_2.png
+# 分类：干员头像（avatar）
+# 目标尺寸：180×180  （原图带透明通道）
+# 原图：D:\otherProject\Nailong-Stronghold-Protocol\nailong\art\work\src\char\avatar\char_010_chen_2.png
+# 把成品放到：D:\otherProject\Nailong-Stronghold-Protocol\nailong\art\work\out\char\avatar\char_010_chen_2.png
+
+Q版可爱卡通风格，粗而干净的外轮廓线，平涂赛璐璐上色，暖黄色主色调，圆润造型，柔和的高光，小尺寸下依然清晰可读。角色头像：陈（精英2头像），拟人化为奶龙（黄色小奶龙）。正方形构图，头部特写，居中，透明或纯色背景，不要文字。
+
+# 负面提示词
+写实，照片，3D渲染，厚涂，阴暗，恐怖，暴力，文字，水印，签名，多手多脚，畸形，模糊，低对比度，复杂背景

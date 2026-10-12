@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>奶龙化审图台 · nailong art review</title>
+<style>
+  :root { color-scheme: dark; --bg0:#12100a; --bg1:#1a1710; --bg2:#241f14; --line:#3a3220; --line2:#4b4129;
+          --fg:#c3cbc7; --lo:#8a948f; --acc:#ffd23f; --amber:#ff9e2c; }
+  body { margin:0; background:var(--bg0); color:var(--fg); font:13px/1.5 "Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif; }
+  header { position:sticky; top:0; z-index:10; background:rgba(22,19,12,.9); backdrop-filter:blur(8px);
+           border-bottom:1px solid var(--line); padding:10px 14px; display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
+  h1 { font-size:15px; margin:0; color:var(--acc); }
+  .stat { color:var(--lo); }
+  select,button,input[type=search] { background:var(--bg2); color:var(--fg); border:1px solid var(--line2);
+           border-radius:6px; padding:4px 8px; font:inherit; }
+  button[aria-pressed=true] { border-color:var(--acc); color:var(--acc); }
+  main { padding:12px; display:grid; gap:10px; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); }
+  .card { background:var(--bg1); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .pair { display:grid; grid-template-columns:1fr 1fr;
+          background:repeating-conic-gradient(#1a1a1a 0% 25%, #242424 0% 50%) 50% / 16px 16px; }
+  .pair figure { margin:0; display:flex; align-items:center; justify-content:center; min-height:104px; padding:4px; position:relative; }
+  .pair figure:first-child { border-right:1px dashed var(--line2); }
+  .pair figure::after { content:attr(data-tag); position:absolute; left:4px; top:4px; font-size:10px;
+          background:rgba(0,0,0,.55); color:var(--lo); padding:0 4px; border-radius:3px; }
+  .pair img { max-width:100%; max-height:140px; display:block; }
+  .meta { padding:6px 8px; border-top:1px solid var(--line); }
+  .path { color:var(--lo); font-size:11px; word-break:break-all; }
+  .tag { display:inline-block; font-size:10px; padding:1px 5px; border-radius:4px; background:rgba(255,210,63,.2);
+         color:var(--acc); margin-right:4px; }
+  .warn { color:var(--amber); }
+  .empty { padding:40px; text-align:center; color:var(--lo); grid-column:1/-1; line-height:2; }
+  code { background:var(--bg2); padding:1px 5px; border-radius:4px; color:var(--acc); }
+  a { color:var(--acc); }
+</style>
+</head>
+<body>
+<header>
+  <h1>奶龙化审图台</h1>
+  <span class="stat" id="stat">读取中…</span>
+  <label>分类 <select id="cls"><option value="">全部</option></select></label>
+  <label>筛选 <input type="search" id="q" placeholder="路径关键字…" /></label>
+  <button id="reload">重新载入</button>
+  <a href="/nailong/preview.html" title="刷新">↻</a>
+</header>
+<main id="grid"><div class="empty">载入中…</div></main>
+
+<script type="module">
+// 数据源：/nailong/gen/manifest.json 的 assetMirror（= nailong/assets/ 下真实存在的替换文件）。
+// 左：/nailong/orig/assets/... 走上游原图；右：/assets/... 走覆盖层 → 奶龙版。
+const grid = document.getElementById('grid');
+const stat = document.getElementById('stat');
+const clsSel = document.getElementById('cls');
+const q = document.getElementById('q');
+let all = [];
+
+const clsOf = (url) => {
+  const rel = url.replace(/^\/assets\//, '');
+  const two = rel.split('/').slice(0, 2).join('/');
+  const one = rel.split('/')[0];
+  if (two === 'char/portrait') return 'portrait';
+  if (two === 'char/avatar') return 'avatar';
+  if (two === 'spine/op') return 'spine-干员';
+  if (two === 'spine/enemy') return 'spine-敌人';
+  if (two === 'spine/token') return 'spine-召唤物';
+  if (one === 'skill') return 'skill';
+  if (one === 'enemy') return 'enemy';
+  if (one === 'token') return 'token';
+  if (one === 'item') return 'item';
+  if (one === 'band') return 'band';
+  if (one === 'bond') return 'bond';
+  if (one === 'module') return 'module';
+  if (one === 'prof') return 'prof';
+  if (one === 'ui') return 'ui';
+  return 'other';
+};
+
+function render() {
+  const cls = clsSel.value;
+  const needle = q.value.trim().toLowerCase();
+  const list = all.filter((u) => (!cls || clsOf(u) === cls) && (!needle || u.toLowerCase().includes(needle)));
+  stat.textContent = all.length
+    ? `已替换 ${all.length} 个素材` + (list.length !== all.length ? ` · 当前筛选 ${list.length}` : '')
+    : '还没有替换任何素材';
+  if (!list.length) {
+    grid.innerHTML = '<div class="empty">还没有可审的替换文件。<br>流程：<code>art.mjs plan</code> → <code>extract</code> → AI 处理 <code>nailong/art/work/src</code> → 成品放 <code>nailong/art/work/out</code> → <code>ingest</code> → <code>nailong.mjs build</code>。</div>';
+    return;
+  }
+  grid.replaceChildren(...list.slice(0, 400).map((url) => {
+    const card = document.createElement('div'); card.className = 'card';
+    const pair = document.createElement('div'); pair.className = 'pair';
+    for (const [src, tag] of [[`/nailong/orig${url}`, '原版'], [url, '奶龙']]) {
+      const fig = document.createElement('figure'); fig.dataset.tag = tag;
+      const img = document.createElement('img');
+      img.loading = 'lazy'; img.src = src + (tag === '奶龙' ? '?v=' + Date.now() : '');
+      img.onerror = () => { fig.innerHTML = '<span class="warn">加载失败</span>'; fig.dataset.tag = tag; };
+      fig.append(img); pair.append(fig);
+    }
+    const meta = document.createElement('div'); meta.className = 'meta';
+    meta.innerHTML = `<span class="tag">${clsOf(url)}</span><span class="path">${url.replace('/assets/', '')}</span>`;
+    card.append(pair, meta);
+    return card;
+  }));
+  if (list.length > 400) grid.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: `还有 ${list.length - 400} 个未显示，请缩小筛选范围` }));
+}
+
+async function load() {
+  try {
+    const res = await fetch('/nailong/gen/manifest.json', { cache: 'no-cache' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const m = await res.json();
+    all = (m.assetMirror ?? []).map((x) => x.url).sort();
+    const classes = [...new Set(all.map(clsOf))].sort();
+    clsSel.replaceChildren(
+      Object.assign(document.createElement('option'), { value: '', textContent: '全部' }),
+      ...classes.map((c) => Object.assign(document.createElement('option'), { value: c, textContent: `${c} (${all.filter((u) => clsOf(u) === c).length})` })));
+    render();
+  } catch (e) {
+    grid.innerHTML = `<div class="empty">读不到 <code>/nailong/gen/manifest.json</code>（${e.message}）。<br>先跑 <code>node nailong/bin/nailong.mjs build</code>。</div>`;
+  }
+}
+clsSel.onchange = render; q.oninput = render;
+document.getElementById('reload').onclick = load;
+load();
+</script>
+</body>
+</html>

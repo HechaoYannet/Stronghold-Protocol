@@ -1,0 +1,35 @@
+{
+  "$comment": "奶龙化命名表 —— 按 id 索引（比按中文原文抗上游改动）。$rule 给整类套统一前后缀，个别条目可显式覆盖。构建时会到 data/*.json 查出当前官方中文名再生成带哈希校验的覆盖层。",
+  "chess": {
+    "$rule": {
+      "prefix": "奶龙·"
+    },
+    "char_199_yak": "奶龙·铁角",
+    "char_103_angel": "奶龙·小天使",
+    "char_1013_chen2": "奶龙·假日威龙",
+    "char_350_surtr": "奶龙·焚天",
+    "char_112_siege": "奶龙·推进王",
+    "char_003_kalts": "奶龙·凯尔希",
+    "char_616_pithst": "奶龙·盟约辅佐"
+  },
+  "skill": {},
+  "enemy": {
+    "$rule": {
+      "prefix": "奶龙·"
+    }
+  },
+  "token": {
+    "$rule": {
+      "prefix": "奶龙·"
+    }
+  },
+  "bond": {},
+  "band": {},
+  "item": {},
+  "boss": {
+    "$rule": {
+      "prefix": "奶龙·"
+    }
+  },
+  "garrison": {}
+}

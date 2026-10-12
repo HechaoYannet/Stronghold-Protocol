@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>奶龙化文本校订 · nailong text review</title>
+<style>
+  :root { color-scheme: dark; --bg0:#12100a; --bg1:#1a1710; --bg2:#241f14; --line:#3a3220; --line2:#4b4129;
+          --fg:#c3cbc7; --lo:#8a948f; --acc:#ffd23f; }
+  body { margin:0; background:var(--bg0); color:var(--fg); font:13px/1.6 "Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif; }
+  header { position:sticky; top:0; z-index:10; background:rgba(22,19,12,.94); backdrop-filter:blur(8px);
+           border-bottom:1px solid var(--line); padding:10px 14px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  h1 { font-size:15px; margin:0; color:var(--acc); }
+  .stat { color:var(--lo); }
+  select,button,input[type=search] { background:var(--bg2); color:var(--fg); border:1px solid var(--line2);
+           border-radius:6px; padding:4px 8px; font:inherit; }
+  main { padding:12px 14px 60px; }
+  table { border-collapse:collapse; width:100%; }
+  th,td { text-align:left; padding:5px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { position:sticky; top:52px; background:var(--bg1); color:var(--lo); font-weight:500; z-index:5; }
+  td.id { color:var(--lo); font-size:11px; font-family:ui-monospace,Consolas,monospace; white-space:nowrap; }
+  td.zh { color:var(--lo); width:26%; }
+  td.nl { color:var(--acc); width:26%; }
+  .empty { padding:40px; text-align:center; color:var(--lo); line-height:2; }
+  code { background:var(--bg2); padding:1px 5px; border-radius:4px; color:var(--acc); }
+  .bar { display:flex; gap:8px; align-items:center; }
+  .bar > span { color:var(--lo); font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>奶龙化文本校订</h1>
+  <span class="stat" id="stat">读取中…</span>
+  <label>数据表 <select id="file"></select></label>
+  <label>筛选 <input type="search" id="q" placeholder="原文或奶龙文本…" /></label>
+  <div class="bar"><span id="hint"></span></div>
+</header>
+<main id="main"><div class="empty">载入中…</div></main>
+
+<script type="module">
+// 直接读 data/*.json 与 packs/nailong-lang/data.json，用 /shared/i18nData.js 的官方覆盖逻辑
+// （含逐叶哈希校验）算出国服文本 → 于是这个页面显示的**就是游戏里真正会显示的**。
+import { applyFileOverlay } from '/shared/i18nData.js';
+
+const FILES = [
+  ['chess', '干员'], ['enemies', '敌人'], ['tokens', '召唤物'], ['bosses', '首领'],
+  ['items', '装备'], ['bonds', '盟约'], ['bands', '策略'], ['garrisons', '特质'], ['config', '配置'], ['tuning', '称号'],
+];
+const sel = document.getElementById('file');
+const q = document.getElementById('q');
+const main = document.getElementById('main');
+const stat = document.getElementById('stat');
+const hint = document.getElementById('hint');
+let overlay = null;
+const cache = new Map();
+const counts = new Map();
+
+function rowsFor(file, id, zh, nl, depth = 0) {
+  const out = [];
+  if (zh == null) return out;
+  if (typeof zh === 'string') { if (nl && nl !== zh) out.push({ id, zh, nl }); return out; }
+  if (typeof nl !== typeof zh) return out;
+  if (Array.isArray(zh)) { zh.forEach((v, i) => out.push(...rowsFor(file, id, v, nl[i], depth + 1))); return out; }
+  if (typeof zh === 'object') for (const k of Object.keys(zh)) out.push(...rowsFor(file, id, zh[k], nl?.[k], depth + 1));
+  return out;
+}
+
+async function loadFile(name) {
+  if (cache.has(name)) return cache.get(name);
+  const [zhRes, ovRes] = await Promise.all([fetch('/data/' + name + '.json', { cache: 'no-cache' }), fetch('/packs/nailong-lang/data.json', { cache: 'no-cache' })]);
+  const zh = await zhRes.json();
+  overlay ??= await ovRes.json();
+  const fileOv = overlay.files?.[name];
+  const loc = fileOv ? applyFileOverlay(zh, fileOv).value : zh;
+  const rows = [];
+  for (const [id, rec] of Object.entries(zh)) rows.push(...rowsFor(name, id, rec, loc[id]));
+  const v = { rows, total: Object.keys(zh).length };
+  cache.set(name, v);
+  return v;
+}
+
+async function render() {
+  const name = sel.value;
+  const v = await loadFile(name);
+  const needle = q.value.trim();
+  const list = needle ? v.rows.filter((r) => r.zh.includes(needle) || r.nl.includes(needle) || r.id.includes(needle)) : v.rows;
+  stat.textContent = `${v.rows.length} 条覆盖 / ${v.total} 条记录`;
+  hint.textContent = list.length !== v.rows.length ? `筛出 ${list.length} 条` : '';
+  if (!list.length) { main.innerHTML = '<div class="empty">这一类还没有覆盖。<br>在 <code>nailong/text/names.json</code> 里加 <code>$rule</code> 或显式条目，再 <code>nailong build</code>。</div>'; return; }
+  const table = document.createElement('table');
+  table.innerHTML = '<thead><tr><th>记录</th><th>官方中文</th><th>奶龙文本</th></tr></thead>';
+  const tb = document.createElement('tbody');
+  for (const r of list.slice(0, 1500)) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td class="id"></td><td class="zh"></td><td class="nl"></td>`;
+    tr.children[0].textContent = r.id;
+    tr.children[1].textContent = r.zh;
+    tr.children[2].textContent = r.nl;
+    tb.append(tr);
+  }
+  table.append(tb);
+  main.replaceChildren(table);
+  if (list.length > 1500) main.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: `还有 ${list.length - 1500} 条，请缩小筛选范围` }));
+}
+
+sel.replaceChildren(...FILES.map(([v, label]) => Object.assign(document.createElement('option'), { value: v, textContent: `${label}（${v}）` })));
+sel.onchange = render; q.oninput = render;
+render();
+</script>
+</body>
+</html>

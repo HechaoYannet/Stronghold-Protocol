@@ -150,9 +150,15 @@ export function installHttpOverlay(server, { layer, manifest, log = console }) {
         const abs = resolveUnder(webDir, p.slice('/nailong/'.length));
         if (abs && await serveFileFrom(req, res, abs, { log })) return;
       }
+      // 原图通道：/nailong/orig/<public 下的相对路径> 直读上游 public/，用于 A/B 对照与审图。
+      if (p.startsWith('/nailong/orig/')) {
+        const abs = resolveUnder(layer.publicDir, p.slice('/nailong/orig/'.length));
+        if (abs && await serveFileFrom(req, res, abs, { log })) return;
+      }
       if (p.startsWith('/assets/')) {
         const m = assets.get(p);
-        if (m && await serveFileFrom(req, res, m.file, { cache: 'public, max-age=3600', log })) return;
+        // no-cache（配 ETag 每次校验）：只有替换过的文件走这条路，改成即时生效便于迭代
+        if (m && await serveFileFrom(req, res, m.file, { cache: 'no-cache', log })) return;
       }
     } catch (e) {
       log.error?.('[nailong] 覆盖层处理失败', e);

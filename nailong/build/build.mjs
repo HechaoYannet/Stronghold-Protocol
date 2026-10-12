@@ -199,6 +199,8 @@ export async function build({ log = console.log } = {}) {
 
   const content = buildContent({ layer, log });
   const mirror = buildAssets({ layer, log });
+  // 让审图台与外部工具能读到这份清单（/nailong/gen/ 映射到 gen/web/，而清单在上一层）
+  content.overrides.push({ url: '/nailong/gen/manifest.json', file: layer.manifestPath, why: '审图台读取替换清单' });
 
   writeJson(layer.manifestPath, {
     layer: layer.cfg.layer, version: layer.cfg.version, title: layer.cfg.title,

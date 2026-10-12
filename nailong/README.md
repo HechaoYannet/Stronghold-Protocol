@@ -27,6 +27,9 @@ node nailong/bin/nailong.mjs start          # http://localhost:3000
 | `node nailong/bin/nailong.mjs upstream [--sync] [--push]` | 查看 / 同步上游 |
 | `node --test nailong/checks/layer-check.mjs nailong/checks/content-check.mjs` | 单元检查（16 项） |
 | `node nailong/checks/e2e.mjs` | 无头 Chrome 端到端检查（18 项，需要 Chrome/Edge） |
+| `node nailong/bin/art.mjs plan` | **换皮**：摊出 3,258 个可替换素材的总表 |
+| `node nailong/bin/art.mjs extract / ingest / check` | 换皮：铺料 / 收料 / 覆盖率 |
+| `node nailong/checks/atlas-check.mjs` | 战斗小人图集拆包/打包往返自测（11 项） |
 
 不想动上游的启动方式：`npm start` 仍然跑**原版**，两个入口互不干扰。
 
@@ -176,6 +179,26 @@ export default {
 > `Math.random`、`Date.now`、计时器、跨战斗的模块级状态、以及改动 `bb` / `def` / `chess`
 > （都是深冻结、跨战斗共享的）。随机数一律走 `battle.rng()`，定时走 `battle.after / battle.every`。
 > 违反会让「同一颗种子在服务器和浏览器上算出不同结果」，对局结果被服务器判为不一致。
+
+---
+
+### 3.6 换皮工厂（美术 / 文本批量）
+
+这是本层最主要的使用场景：把干员美术、图标、界面精灵、战斗小人**整批**换成奶龙版本，文本同步奶龙化。
+**完整手册见 [ART.md](ART.md)**，这里只放结论：
+
+- **3,258 个美术目标**（12 类）由 `nailong/bin/art.mjs plan` 从 `data/assets.json` 摊平，
+  每个目标带原图、落点、尺寸、透明通道信息和**建议提示词**。
+- 中间那一步是**工具无关**的：`extract` 把原图铺到 `nailong/art/work/src/`，你用任何批量 AI 工具处理，
+  成品按**同名文件**丢进 `nailong/art/work/out/`，`ingest` 收回来。不需要为本项目写插件或接 API。
+- `ingest` 自动处理两件最容易翻车的事：**尺寸**（按分类走 `cover` 或 `stretch`）与
+  **透明通道**（AI 产物通常没有 alpha，用**原图的 alpha 当遮罩**恢复轮廓）。
+- **战斗小人**（Spine）走专门通道：`.skel` 不用动，只换 `.atlas` + `.png`。两条路 ——
+  整页 img2img 快速铺满，或 `spine unpack/pack` 逐区域精修（含旋转区域、重新装箱、重写坐标）。
+- **审图台** `/nailong/preview.html`：原版 / 奶龙逐张并排，按分类筛选与搜索。
+- **文本**同样有工厂：`nailong/text/names.json`（按 id 索引 + `$rule` 统一前后缀）、
+  `game-texts.json`（扁平原文对照）、`ui.json`（UI 文案）、`glossary.json`（术语表，保证用词一致）；
+  审校台 `/nailong/preview-text.html`。
 
 ---
 
