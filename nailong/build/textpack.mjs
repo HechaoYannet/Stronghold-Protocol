@@ -126,11 +126,13 @@ export function buildTextPack({ repoRoot, layerDir, genDir, cfg, log }) {
   //   names.json       按 id 写（char_199_yak / skchr_yak_1 / …），构建时到 data/*.json 里查出当前中文名再入字典
   //                    —— 上游改了翻译文本也不会失配，这是推荐写法。
   let dataCount = 0;
-  const dictPath = path.join(layerDir, 'text', 'game-texts.json');
+  const dictSource = path.join(layerDir, 'text', 'game-texts.json');
   const namesPath = path.join(layerDir, 'text', 'names.json');
   const namesDoc = readJson(namesPath, null);
-  if (namesDoc) {
-    const merged = { ...(readJson(dictPath, {}) ?? {}) };
+  // 合并结果写到 gen/，**绝不回写 game-texts.json 这个源文件** —— 构建不该弄脏工作区。
+  const dictPath = path.join(genDir, 'game-texts.merged.json');
+  {
+    const merged = { ...(readJson(dictSource, {}) ?? {}) };
     const missing = [];
     let added = 0;
     for (const [kind, map] of Object.entries(namesDoc)) {
@@ -166,6 +168,8 @@ export function buildTextPack({ repoRoot, layerDir, genDir, cfg, log }) {
     if (added) log(`[text] names.json → ${added} 条命名并入字典`);
     for (const m of missing) problems.push(m);
   }
+  // 没有 names.json 也要落一份到 gen/，下游只认 gen 里那一份
+  if (!fs.existsSync(dictPath)) writeJson(dictPath, readJson(dictSource, {}) ?? {});
   const dict = readJson(dictPath, null);
   const entries = dict ? Object.entries(dict).filter(([k, v]) => !k.startsWith('$') && typeof v === 'string' && v) : [];
   const dataOut = path.join(packDir, 'data.json');

@@ -26,9 +26,14 @@ const bad = (s) => `${C.bad}✗${C.off} ${s}`;
 const warn = (s) => `${C.warn}!${C.off} ${s}`;
 const dim = (s) => `${C.dim}${s}${C.off}`;
 
+/** 原样返回 stdout（**不 trim**）：`git status --porcelain` 的首行以空格开头，trim 会吃掉它。 */
+function gitRaw(args) {
+  return execFileSync('git', args, { cwd: REPO_ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+}
+
 function git(args, { allowFail = false } = {}) {
   try {
-    return execFileSync('git', args, { cwd: REPO_ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    return gitRaw(args).trim();
   } catch (e) {
     if (allowFail) return null;
     throw new Error(`git ${args.join(' ')} 失败：${String(e.stderr || e.message).trim()}`);
@@ -103,9 +108,11 @@ export function verifyIsolation({ layer, log = console.log } = {}) {
     if (status === 'A' && isAllowed(p)) continue;
     violations.push(`${status}\t${p}` + (status === 'A' ? '（新增，但不在 nailong/ 或我们的 packs/ 里）' : '（改动了上游文件！）'));
   }
-  const dirty = git(['status', '--porcelain'])
-    .split('\n').filter(Boolean)
-    .map((l) => l.slice(3).trim().replace(/^"|"$/g, ''))
+  // -z：每个条目以 NUL 分隔，形如 "XY <path>"，没有引号也没有需要 trim 的前导空格。
+  // （用换行分隔 + 整体 trim 会把**第一条**的 "XY " 前缀吃掉，把 nailong/... 变成 ailong/... —— 守卫会永远误报第一条。）
+  const dirty = gitRaw(['status', '--porcelain', '-z', '--no-renames'])
+    .split('\0').filter(Boolean)
+    .map((e) => e.slice(3))
     .filter((p) => !isAllowed(p) && !p.startsWith('nailong/'));
   return { ok: violations.length === 0 && dirty.length === 0, ref, base, changed: lines.length, violations, dirty };
 }
@@ -249,7 +256,9 @@ function cmdUpstream(argv) {
     return;
   }
   const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']);
-  if (git(['status', '--porcelain'])) { console.error(bad('工作区不干净，先提交或 stash。')); process.exit(1); }
+  if (gitRaw(['status', '--porcelain', '-z', '--no-renames']).split('\0').filter(Boolean).length) {
+    console.error(bad('工作区不干净，先提交或 stash。')); process.exit(1);
+  }
   const steps = [
     ['checkout', 'master'], ['merge', '--ff-only', 'upstream/master'],
     ['checkout', 'nailong'], ['rebase', 'master'],
