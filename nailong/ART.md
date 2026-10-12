@@ -137,6 +137,37 @@ node nailong/bin/art.mjs spine pack --match "*char_199_yak*front*"
 
 ---
 
+## 3.5 直接调用 AI 生图（SiliconFlow）
+
+不想手工搬文件的话，本层内置了 SiliconFlow（硅基流动）的调用：
+
+```bash
+# 先配 key（绝不入库）：写进 nailong/.env，或临时用环境变量
+echo 'SF_API_KEY=sk-...' > nailong/.env        # 该文件被 .gitignore 忽略
+# 或：$env:SF_API_KEY = "sk-..."
+
+node nailong/bin/art.mjs probe                 # 验 key + 列出可用模型（★ = 支持参考图）
+node nailong/bin/art.mjs generate --class avatar --limit 3 --dry-run   # 看计划，不花钱
+node nailong/bin/art.mjs generate --class avatar --limit 50 --concurrency 2
+node nailong/bin/art.mjs ingest --class avatar
+```
+
+- **默认带参考图**（img2img）：把原图作为 `image` 发给模型，改画风但保住构图，最贴合换皮。
+- **模型**：只有支持参考图的模型能做 img2img（`Qwen/Qwen-Image-Edit` 系列）。纯文生图的
+  （FLUX / Kolors / SD 系列）用 `--no-ref`，但**战斗小人图集绝对不能用文生图**——布局会重画，图集坐标立刻失效。
+  `probe` 会把支持参考图的模型用 ★ 标出来。
+- **尺寸自动挑**：按目标宽高比从受支持的取值里选最接近的（180×360 立绘 → `720x1280`），
+  最终由 `ingest` 缩回精确尺寸。
+- **可续跑**：已有产物的目标自动跳过；`--force` 重生成。
+- **失败处理**：429/5xx 指数退避重试（`--retries`）；401/余额不足这类不可重试的直接报错并给出补救。
+- **安全阀**：没给 `--limit` 也没给 `--yes` 时**只跑 10 张试水**——避免一条命令刷掉一整类 404 张。
+- 产物落在 `nailong/art/work/out/`，和手工流程完全同一条收料路径。
+
+> ⚠️ key 只从环境变量或 `nailong/.env` 读（该文件被根 `.gitignore` 的 `.env` 规则覆盖）。
+> 不要把 key 贴进任何会被提交的文件里；一旦贴到聊天/工单里，建议直接吊销重建。
+
+---
+
 ## 4. 审图：3258 个文件不能靠肉眼一个个开
 
 起服务后打开 **`/nailong/preview.html`**：

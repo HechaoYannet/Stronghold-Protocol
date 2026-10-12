@@ -29,7 +29,9 @@ node nailong/bin/nailong.mjs start          # http://localhost:3000
 | `node nailong/checks/e2e.mjs` | 无头 Chrome 端到端检查（18 项，需要 Chrome/Edge） |
 | `node nailong/bin/art.mjs plan` | **换皮**：摊出 3,258 个可替换素材的总表 |
 | `node nailong/bin/art.mjs extract / ingest / check` | 换皮：铺料 / 收料 / 覆盖率 |
-| `node nailong/checks/atlas-check.mjs` | 战斗小人图集拆包/打包往返自测（11 项） |
+| `node nailong/checks/atlas-check.mjs` | 战斗小人图集拆包/打包往返自测（15 项，含真实模型逐像素） |
+| `node nailong/bin/art.mjs probe` | 验 SiliconFlow key + 列出可用生图模型 |
+| `node nailong/bin/art.mjs generate --limit N` | 直接调 AI 生图（默认带参考图 img2img），产物进 `art/work/out/` |
 
 不想动上游的启动方式：`npm start` 仍然跑**原版**，两个入口互不干扰。
 

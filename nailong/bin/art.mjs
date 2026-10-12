@@ -311,6 +311,152 @@ function cmdStylize(flags) {
     '注意：这是程序化占位，不是 AI 艺术。真图到位后 ingest 会覆盖同名文件。' + C.off);
 }
 
+
+// --------------------------------------------------------------------------- generate
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** 429/5xx 退避重试。 */
+async function withRetry(fn, { tries = 3, label = '', onWait = null } = {}) {
+  let last;
+  for (let i = 1; i <= tries; i++) {
+    try { return await fn(); } catch (e) {
+      last = e;
+      if (i === tries || !e.retryable) throw e;
+      const wait = 2000 * i * i;
+      if (onWait) onWait(`${label} 第 ${i} 次失败（${e.message}），${Math.round(wait / 1000)}s 后重试`);
+      await sleep(wait);
+    }
+  }
+  throw last;
+}
+
+async function cmdGenerate(flags) {
+  const layer = loadLayer();
+  const sf = await import('../build/siliconflow.mjs');
+  const plan = buildArtPlan({ layer, log: () => {} });
+  const { key, from } = sf.resolveKey({ repoRoot: layer.repoRoot, layerDir: layer.layerDir });
+  if (!key) {
+    console.error(C.bad + '没有 SiliconFlow API key。' + C.off);
+    console.error('  PowerShell:  $env:SF_API_KEY = "sk-..."');
+    console.error('  或写进 nailong/.env（已被 .gitignore 忽略）: SF_API_KEY=sk-...');
+    process.exit(2);
+  }
+
+  const model = flags.model ?? sf.DEFAULT_MODEL;
+  const useRef = flags.ref !== false && flags['no-ref'] !== true;
+  const provider = flags.provider ?? 'siliconflow';
+  if (provider !== 'siliconflow') { console.error(C.bad + `暂不支持 provider=${provider}` + C.off); process.exit(2); }
+  if (useRef && !sf.modelSupportsRef(model)) {
+    console.error(C.bad + `模型 ${model} 不支持参考图。换 Qwen/Qwen-Image-Edit 系列，或加 --no-ref（纯文生图）。` + C.off);
+    process.exit(2);
+  }
+
+  let list = select(plan, flags);
+  const workOut = path.join(layer.layerDir, 'art/work/out');
+  const todo = list.filter((t) => !fs.existsSync(path.join(workOut, ...t.rel.split('/'))) || flags.force);
+  const skipped = list.length - todo.length;
+
+  // 安全阀：没给 --limit 也没 --yes 时只跑 10 张，避免一条命令刷掉一整类
+  const explicit = flags.limit != null || flags.yes === true;
+  const batch = explicit ? todo : todo.slice(0, 10);
+
+  console.log('');
+  console.log(C.hi + 'SiliconFlow 生成' + C.off);
+  console.log(`  key      ${key.slice(0, 6)}…${key.slice(-4)}（来自 ${from}）`);
+  console.log(`  模型     ${model}${useRef ? '  ' + dim('（带参考图 img2img）') : '  ' + dim('（纯文生图）')}`);
+  console.log(`  选中     ${list.length} 个目标（已有产物跳过 ${skipped}）`);
+  console.log(`  本次生成 ${batch.length} 张` + (explicit ? '' : C.warn + '   ← 未给 --limit/--yes，默认只跑 10 张试水' + C.off));
+  if (!batch.length) { console.log('\n没有要生成的。'); return; }
+  if (flags['dry-run']) {
+    for (const t of batch.slice(0, 10)) console.log(`  · ${t.id}  → ${sf.pickSize(t.info?.width, t.info?.height)}`);
+    if (batch.length > 10) console.log(`  … 另外 ${batch.length - 10} 个`);
+    console.log('\n--dry-run：没有真的调用接口。');
+    return;
+  }
+
+  const conc = Math.max(1, Number(flags.concurrency ?? 1));
+  let ok = 0; let bad = 0; const errors = new Map();
+  let done = 0;
+  const t0 = Date.now();
+  let cursor = 0;
+
+  async function worker() {
+    while (cursor < batch.length) {
+      const t = batch[cursor++];
+      const size = sf.pickSize(t.info?.width, t.info?.height);
+      const out = path.join(workOut, ...t.rel.split('/'));
+      try {
+        const r = await withRetry(() => sf.generateImage({
+          key, model, prompt: t.prompt, negative: plan.style.negative,
+          refPath: useRef ? t.src : undefined, size,
+          steps: flags.steps != null ? Number(flags.steps) : undefined,
+          guidance: flags.guidance != null ? Number(flags.guidance) : undefined,
+          seed: flags.seed != null ? Number(flags.seed) : undefined,
+        }), { tries: Number(flags.retries ?? 3), label: t.id, onWait: (m) => console.log(C.warn + '  ' + m + C.off) });
+        ensureDir(path.dirname(out));
+        fs.writeFileSync(out, Buffer.from(r.b64, 'base64'));
+        ok++;
+      } catch (e) {
+        bad++;
+        const k = e.code != null ? `code ${e.code} ${e.message.replace(/^HTTP \d+ code \d+ /, '')}` : e.message;
+        errors.set(k, (errors.get(k) ?? 0) + 1);
+        if (flags.verbose || bad <= 3) console.log(C.bad + `  ✗ ${t.id}: ${e.message}` + C.off);
+      }
+      done++;
+      if (done % 5 === 0 || done === batch.length) {
+        const secs = (Date.now() - t0) / 1000;
+        const rate = done / secs;
+        const eta = rate > 0 ? Math.round((batch.length - done) / rate) : 0;
+        process.stdout.write(`\r  ${done}/${batch.length}  ok=${ok} err=${bad}  ${rate.toFixed(2)}/s  剩余约 ${Math.floor(eta / 60)}m${String(eta % 60).padStart(2, '0')}s   `);
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(conc, batch.length) }, worker));
+  process.stdout.write('\n');
+
+  console.log(`\n${ok ? C.ok + '✓' : ''}${C.off} 生成完成：成功 ${ok}，失败 ${bad}，用时 ${Math.round((Date.now() - t0) / 1000)}s`);
+  if (errors.size) {
+    console.log(C.bad + '\n失败原因：' + C.off);
+    for (const [k, n] of [...errors.entries()].sort((a, b) => b[1] - a[1])) console.log(`  ${n}× ${k}`);
+    if ([...errors.keys()].some((k) => /401|30014|Token is invalid/i.test(k))) {
+      console.log(C.warn + '\n  key 无效。到 https://cloud.siliconflow.cn 的「账户管理 → API 密钥」重新复制一个，' + C.off);
+      console.log(C.warn + '  然后 \$env:SF_API_KEY = "sk-..." 再跑。这个 key 已经出现在聊天记录里，建议一并吊销重建。' + C.off);
+    }
+  }
+  if (ok) {
+    console.log('\n产物在 ' + dim(path.relative(layer.repoRoot, workOut)) + '，接着收料：');
+    console.log('  node nailong/bin/art.mjs ingest' + (flags.class ? ' --class ' + flags.class : ''));
+  }
+}
+
+async function cmdProbe(flags) {
+  const layer = loadLayer();
+  const sf = await import('../build/siliconflow.mjs');
+  const { key, from } = sf.resolveKey({ repoRoot: layer.repoRoot, layerDir: layer.layerDir });
+  console.log('');
+  console.log(C.hi + 'SiliconFlow 探活' + C.off);
+  console.log('  key 来源  ' + (from ?? '(没有找到 key)'));
+  if (!key) {
+    console.log(C.bad + '\n没有 key。设 $env:SF_API_KEY，或写进 nailong/.env。' + C.off);
+    process.exit(2);
+  }
+  const r = await sf.probe({ key });
+  if (!r.authOk) {
+    console.log(C.bad + '\n✗ 鉴权失败：' + r.error + C.off);
+    console.log('  接口本身是通的（能拿到服务端返回），问题在这个 key 上：');
+    console.log('   · 到 https://cloud.siliconflow.cn → 账户管理 → API 密钥 重新复制或新建一个');
+    console.log('   · 确认账号有余额（多数生图模型要扣费，余额为 0 会另报错误码）');
+    process.exit(1);
+  }
+  console.log(C.ok + '\n✓ 鉴权通过' + C.off);
+  console.log(`  可用生图模型 ${r.imageModels.length} 个：`);
+  for (const m of r.imageModels.slice(0, 40)) {
+    console.log('   ' + (sf.modelSupportsRef(m) ? C.ok + '★' + C.off : ' ') + ' ' + m + (sf.modelSupportsRef(m) ? dim('  支持参考图（可做 img2img / 图集）') : ''));
+  }
+  if (r.imageModels.length > 40) console.log(`   … 另外 ${r.imageModels.length - 40} 个`);
+  console.log('\n  ' + dim('★ = 支持 image 参考图，换皮请优先用它（Qwen-Image-Edit 系列）'));
+}
+
 // -------------------------------------------------------------------------------- spine
 async function cmdSpine(flags) {
   const layer = loadLayer();
@@ -392,6 +538,14 @@ ${C.hi}奶戍协议 · 美术换皮流水线${C.off}
                                 战斗小人：按区域拆包（每块一张 png + _regions.json）
   spine pack [--page N]         战斗小人：把（可能重绘过的）区域重新打包成图集
 
+  ${C.hi}── 直接调用 AI 生图（SiliconFlow）──${C.off}
+  probe                         探活：验 key、列出可用模型（★ 标注支持参考图的）
+  generate [--limit N] [--yes] [--concurrency N] [--model M] [--no-ref]
+          [--steps N] [--guidance F] [--seed N] [--force] [--dry-run] [--verbose]
+                                按总表逐张生成，产物直接落到 art/work/out/，之后 ingest 收料
+                                ${C.dim}默认带参考图（img2img）；未给 --limit/--yes 时只跑 10 张试水${C.off}
+                                ${C.dim}key 从 SF_API_KEY 或 nailong/.env 读，绝不入库${C.off}
+
   分类：${Object.keys(CLASSES).join(' | ')}
 
   ${C.dim}先 plan 看全貌；extract 之后用任何批量 AI 工具处理 art/work/src/**，成品丢进 art/work/out/**，再 ingest。${C.off}
@@ -400,7 +554,10 @@ ${C.hi}奶戍协议 · 美术换皮流水线${C.off}
 const argv = process.argv.slice(2);
 const cmd = argv[0];
 const flags = parseFlags(argv.slice(1));
-const table = { plan: cmdPlan, extract: cmdExtract, ingest: cmdIngest, check: cmdCheck, sheet: cmdSheet, stylize: cmdStylize, spine: cmdSpine };
+const table = {
+  plan: cmdPlan, extract: cmdExtract, ingest: cmdIngest, check: cmdCheck, sheet: cmdSheet, stylize: cmdStylize, spine: cmdSpine,
+  generate: cmdGenerate, gen: cmdGenerate, probe: cmdProbe,
+};
 if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h') console.log(HELP);
 else if (table[cmd]) await table[cmd](flags);
 else { console.error(C.bad + `未知命令 "${cmd}"` + C.off); console.log(HELP); process.exit(2); }
