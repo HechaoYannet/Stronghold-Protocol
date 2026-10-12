@@ -38,7 +38,7 @@ try {
   }
 
   const packed = py('atlas-pack', '--regions', path.join(regionsDir, '_regions.json'), '--indir', regionsDir,
-    '--out-atlas', path.join(tmp, 'out.atlas'), '--out-png', path.join(tmp, 'out.png'), '--page', '256');
+    '--out-atlas', path.join(tmp, 'out.atlas'), '--out-png', path.join(tmp, 'out.png'), '--page', '256', '--no-keep-size');
   check('打包：产出图集与页图', fs.existsSync(path.join(tmp, 'out.atlas')) && fs.existsSync(path.join(tmp, 'out.png')), `页 ${packed.pageSize.join('×')}`);
 
   const text = fs.readFileSync(path.join(tmp, 'out.atlas'), 'utf8');
@@ -61,6 +61,37 @@ try {
   check('二次拆包自洽', rt.regions === fx.regions.length, `${rt.regions} 区域`);
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// ---- 真实数据往返：有素材时，把真实干员图集原样拆包再打包，要求逐像素无损 ----
+const opDir = path.resolve(HERE, '..', '..', 'public', 'assets', 'spine', 'op');
+if (fs.existsSync(opDir)) {
+  const models = [];
+  for (const id of fs.readdirSync(opDir).sort().slice(0, 40)) {
+    for (const side of ['front', 'back']) {
+      const base = path.join(opDir, id, side, id);
+      if (fs.existsSync(base + '.atlas') && fs.existsSync(base + '.png')) models.push({ id, side, base });
+    }
+    if (models.length >= 4) break;
+  }
+  if (models.length) {
+    console.log('\n  —— 真实数据往返 ——');
+    for (const m of models) {
+      const dir = path.join(tmp, 'real-' + m.id + '-' + m.side);
+      const up = py('atlas-unpack', '--atlas', m.base + '.atlas', '--png', m.base + '.png', '--outdir', dir, '--min-size', '24');
+      const pk = py('atlas-pack', '--regions', path.join(dir, '_regions.json'), '--indir', dir,
+        '--out-atlas', path.join(dir, 'out.atlas'), '--out-png', path.join(dir, 'out.png'), '--page', '512');
+      const v = py('atlas-verify', '--atlas-a', m.base + '.atlas', '--png-a', m.base + '.png',
+        '--atlas-b', path.join(dir, 'out.atlas'), '--png-b', path.join(dir, 'out.png'));
+      const p = parseAtlas(fs.readFileSync(path.join(dir, 'out.atlas'), 'utf8'));
+      const ok = v.onlyA.length === 0 && v.onlyB.length === 0 && v.mismatchCount === 0 && p.pages.length === 1;
+      check(`真实模型 ${m.id}/${m.side} 无损往返`, ok,
+        `${up.regions} 区域（旋转 ${up.rotated} · 可重绘 ${up.drawable}）→ 页 ${pk.pageSize.join('×')}` +
+        (ok ? '' : `  仅A=${v.onlyA.length} 仅B=${v.onlyB.length} 不一致=${v.mismatchCount} ${JSON.stringify(v.mismatched.slice(0, 2))}`));
+    }
+  }
+} else {
+  console.log('\n  （public/assets/spine 还没有素材，跳过真实数据往返）');
 }
 
 const failed = results.filter((r) => !r.pass);

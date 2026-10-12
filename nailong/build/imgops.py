@@ -197,9 +197,10 @@ def cmd_atlas_unpack(args):
             rec["skip"] = "rotated"
         elif w < args.min_size or h < args.min_size:
             rec["skip"] = "small"
-        crop = img.crop((x, y, x + w, y + h))
+        # ★旋转区域在图集里是**横着存**的：占 h 宽、w 高（size 字段给的是转正后的尺寸）。
+        #   方向经实测确认：stored.rotate(-90)（顺时针）得到正立图 —— 见 ART.md「旋转区域」。
+        crop = img.crop((x, y, x + h, y + w)) if rotated else img.crop((x, y, x + w, y + h))
         if rotated:
-            # Spine 图集里旋转存储的区域：转正后再交给 AI（方向按 libgdx 约定：顺时针存、逆时针还原）
             crop = crop.rotate(-90, expand=True)
         safe = re.sub(r"[^A-Za-z0-9._-]", "_", r["name"])
         crop.save(os.path.join(args.outdir, safe + ".png"))
@@ -227,10 +228,16 @@ def cmd_atlas_pack(args):
         if not os.path.exists(p):
             p = os.path.join(args.indir, re.sub(r"[^A-Za-z0-9._-]", "_", r["name"]) + ".png")
         im = Image.open(p).convert("RGBA")
-        if r["rotate"]:
-            im = im.rotate(90, expand=True)  # 还原成图集里的存储方向
-        imgs[r["name"]] = im
-        r["packSize"] = list(im.size)
+        w, h = r["size"]  # size 字段 = 转正后的尺寸（.skel 的几何依赖它，必须保持不变）
+        if args.keep_size and im.size != (w, h):
+            im = im.resize((w, h), Image.LANCZOS)
+        elif not args.keep_size:
+            w, h = im.size
+        r["atlasSize"] = [w, h]
+        # 旋转区域要还原成图集里的存储方向：(w,h) --rotate(+90)--> (h,w)，正是 unpack 的逆操作
+        stored = im.rotate(90, expand=True) if r["rotate"] else im
+        imgs[r["name"]] = stored
+        r["packSize"] = list(stored.size)
 
     # shelf 装箱：按高度降序，一行一行摆
     order = sorted(regions, key=lambda r: (-imgs[r["name"]].height, -imgs[r["name"]].width))
@@ -275,9 +282,10 @@ def cmd_atlas_pack(args):
     for r in regions:
         # 区域之间不留空行（空行 = 新页；上游 pixi-spine 的读取规则）
         lines.append(r["name"])
-        lines.append("rotate: false")
+        # 旋转标志必须原样保留：pixi-spine 靠它把 (h,w) 的存储矩形采样回转正的 (w,h)
+        lines.append("rotate: %s" % ("true" if r["rotate"] else "false"))
         lines.append("xy: %d, %d" % tuple(r["newXY"]))
-        lines.append("size: %d, %d" % tuple(r["newSize"]))
+        lines.append("size: %d, %d" % tuple(r.get("atlasSize") or r["newSize"]))
         lines.append("orig: %d, %d" % tuple(r["orig"]))
         lines.append("offset: %d, %d" % tuple(r["offset"]))
         lines.append("index: %d" % r["index"])
@@ -347,6 +355,51 @@ def cmd_sheet(args):
     out({"out": args.out, "files": len(files), "cols": cols, "rows": rows, "cell": cell})
 
 
+# --------------------------------------------------------------------- atlas-verify
+def cmd_atlas_verify(args):
+    """比对两个图集：区域集合是否一致、每个区域的**未旋转像素**是否逐像素相同。
+
+    这是「重新打包没有把画弄坏」的判据：原图与重打包图在各自坐标上切出来的区域图应当一模一样。
+    """
+    def load(atlas, png):
+        meta = parse_atlas(open(atlas, encoding="utf-8").read())
+        page = meta[0]
+        img = Image.open(png).convert("RGBA")
+        out = {}
+        for r in page["regions"]:
+            f = r["fields"]
+            if "xy" not in f or "size" not in f:
+                continue
+            x, y = _ints(f["xy"]); w, h = _ints(f["size"])
+            rot = str(f.get("rotate", "false")).lower() == "true"
+            crop = img.crop((x, y, x + h, y + w)) if rot else img.crop((x, y, x + w, y + h))
+            if rot:
+                crop = crop.rotate(-90, expand=True)
+            out[r["name"]] = crop
+        return out, page
+
+    a, pa = load(args.atlas_a, args.png_a)
+    b, pb = load(args.atlas_b, args.png_b)
+    onlyA = sorted(set(a) - set(b))
+    onlyB = sorted(set(b) - set(a))
+    mismatched = []
+    for name in sorted(set(a) & set(b)):
+        ia, ib = a[name], b[name]
+        if ia.size != ib.size:
+            mismatched.append({"region": name, "why": "size %s vs %s" % (ia.size, ib.size)})
+            continue
+        diff = ImageChops.difference(ia, ib)
+        if diff.getbbox() is not None:
+            import math as _m
+            hist = diff.convert("L").histogram()
+            nonzero = sum(hist[1:])
+            worst = max(i for i, v in enumerate(hist) if v) if nonzero else 0
+            mismatched.append({"region": name, "why": "pixels differ", "changedPx": nonzero, "maxDelta": worst})
+    out({"regionsA": len(a), "regionsB": len(b), "onlyA": onlyA, "onlyB": onlyB,
+         "compared": len(set(a) & set(b)), "mismatched": mismatched[:20], "mismatchCount": len(mismatched),
+         "pageSizeA": pa["fields"].get("size"), "pageSizeB": pb["fields"].get("size")})
+
+
 # ---------------------------------------------------------------------------- fixture
 def cmd_fixture(args):
     """生成一对合成的 图集+PNG，用于 atlas-unpack/pack 的往返自测（不依赖任何游戏素材）。"""
@@ -402,12 +455,19 @@ def main():
     p.add_argument("--regions", required=True); p.add_argument("--indir", required=True)
     p.add_argument("--out-atlas", required=True); p.add_argument("--out-png", required=True)
     p.add_argument("--page", type=int, default=1024); p.add_argument("--pad", type=int, default=2)
+    p.add_argument("--keep-size", dest="keep_size", action="store_true", default=True)
+    p.add_argument("--no-keep-size", dest="keep_size", action="store_false")
     p.set_defaults(fn=cmd_atlas_pack)
 
     p = sub.add_parser("stylize")
     p.add_argument("--src", required=True); p.add_argument("--out", required=True)
     p.add_argument("--preset", default="nailong-yellow"); p.add_argument("--strength", type=float, default=1.0)
     p.set_defaults(fn=cmd_stylize)
+
+    p = sub.add_parser("atlas-verify")
+    p.add_argument("--atlas-a", required=True); p.add_argument("--png-a", required=True)
+    p.add_argument("--atlas-b", required=True); p.add_argument("--png-b", required=True)
+    p.set_defaults(fn=cmd_atlas_verify)
 
     p = sub.add_parser("fixture")
     p.add_argument("--outdir", required=True)
