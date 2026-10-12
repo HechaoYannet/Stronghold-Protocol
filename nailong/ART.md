@@ -137,34 +137,51 @@ node nailong/bin/art.mjs spine pack --match "*char_199_yak*front*"
 
 ---
 
-## 3.5 直接调用 AI 生图（SiliconFlow）
+## 3.5 直接调用 AI 生图
 
-不想手工搬文件的话，本层内置了 SiliconFlow（硅基流动）的调用：
+不想手工搬文件的话，本层内置了 provider。**默认 dry-run，计费接口必须有 `--yes` 才会真的出图。**
 
 ```bash
-# 先配 key（绝不入库）：写进 nailong/.env，或临时用环境变量
-echo 'SF_API_KEY=sk-...' > nailong/.env        # 该文件被 .gitignore 忽略
-# 或：$env:SF_API_KEY = "sk-..."
-
-node nailong/bin/art.mjs probe                 # 验 key + 列出可用模型（★ = 支持参考图）
-node nailong/bin/art.mjs generate --class avatar --limit 3 --dry-run   # 看计划，不花钱
-node nailong/bin/art.mjs generate --class avatar --limit 50 --concurrency 2
-node nailong/bin/art.mjs ingest --class avatar
+# key 写进 nailong/.env（已被 .gitignore 忽略），或用环境变量
+node nailong/bin/art.mjs probe                        # 列可用模型
+node nailong/bin/art.mjs generate --limit 1 --dry-run  # 打印**真实请求体**，零消耗
+node nailong/bin/art.mjs generate --limit 1 --yes      # 确认后才真出图
+node nailong/bin/art.mjs ingest                        # 收料（尺寸/透明通道在这一步统一处理）
 ```
 
-- **默认带参考图**（img2img）：把原图作为 `image` 发给模型，改画风但保住构图，最贴合换皮。
-- **模型**：只有支持参考图的模型能做 img2img（`Qwen/Qwen-Image-Edit` 系列）。纯文生图的
-  （FLUX / Kolors / SD 系列）用 `--no-ref`，但**战斗小人图集绝对不能用文生图**——布局会重画，图集坐标立刻失效。
-  `probe` 会把支持参考图的模型用 ★ 标出来。
-- **尺寸自动挑**：按目标宽高比从受支持的取值里选最接近的（180×360 立绘 → `720x1280`），
+### provider 与模型
+
+| provider | 模型 | 协议 | 计费 | 参考图 |
+|---|---|---|---|---|
+| **aliyun**（阿里云百炼 / Token Plan） | `qwen-image-3.0-pro`（默认）`qwen-image-3.0` `qwen-image-2.1-pro` `qwen-image-2.1-turbo` | OpenAI 兼容 `/compatible-mode/v1/images/generations` | **按张**（token 不计费） | 3.0 系列 1–3 张；2.1 系列 1–10 张 |
+| aliyun | `wan2.7-image` `wan2.7-image-pro` | DashScope 原生 `/api/v1/services/aigc/multimodal-generation/generation` | 按张 | 1–3 张 |
+| siliconflow | `Qwen/Qwen-Image-Edit` | OpenAI 兼容 | 按张 | 支持 |
+
+- **模型白名单写死在 `nailong/build/aliyun.mjs`**：`--model` 只能在这几个里选。这是刻意的——
+  账号按张计费，不能让参数随手写一个就走，避免误调到更贵的模型。
+- **`qwen-image-2.1-pro` / `-turbo` 能自动输出带 alpha 透明通道的图**，做贴图 / 战斗小人时值得优先试。
+- **两族协议不同**：`qwen-image-*` 的参数**全部平铺在顶层**（没有 `input`/`parameters` 嵌套）；
+  `wan2.7-*` 用 `input.messages` + `parameters`。代码里按模型自动分支，不要手工混用。
+- **参考图支持 base64**（`data:image/png;base64,…`），所以本地文件可以直接发，不需要先传图床。
+
+### 额度闸门（三层，都在 `art.mjs generate` 里）
+
+1. **没有 `--yes` 就绝不发请求**（仅对计费 provider）。默认只做到 dry-run 那一步。
+2. **单次张数硬上限 `--max`（默认 5）**。要更多必须显式抬：`--limit 404 --max 404 --yes`。
+3. **`--dry-run` 会打印真实请求体**（URL + JSON，参考图用 `<省略 N KB>` 占位），
+   可以先看清「会发什么、什么尺寸、什么提示词」再决定。
+
+### 其它
+
+- **尺寸自动挑**：按目标宽高比算，落在官方允许的 512²–2048² 内（180×360 立绘 → `736*1456`），
   最终由 `ingest` 缩回精确尺寸。
 - **可续跑**：已有产物的目标自动跳过；`--force` 重生成。
-- **失败处理**：429/5xx 指数退避重试（`--retries`）；401/余额不足这类不可重试的直接报错并给出补救。
-- **安全阀**：没给 `--limit` 也没给 `--yes` 时**只跑 10 张试水**——避免一条命令刷掉一整类 404 张。
+- **失败处理**：429/5xx 指数退避重试（`--retries`）；401 / 参数错误这类不可重试的直接报错，不做无意义重试。
+- **按张计费、token 不计费**：响应里的 `usage.image_count` 就是计费张数，失败调用不计费。
 - 产物落在 `nailong/art/work/out/`，和手工流程完全同一条收料路径。
 
-> ⚠️ key 只从环境变量或 `nailong/.env` 读（该文件被根 `.gitignore` 的 `.env` 规则覆盖）。
-> 不要把 key 贴进任何会被提交的文件里；一旦贴到聊天/工单里，建议直接吊销重建。
+> ⚠️ key 只从环境变量或 `nailong/.env` 读（该文件被根 `.gitignore` 的 `.env` 规则覆盖，实测 `git check-ignore` 命中）。
+> 不要把 key 贴进任何会被提交的文件里。
 
 ---
 

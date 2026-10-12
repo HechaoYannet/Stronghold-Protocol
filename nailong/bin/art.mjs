@@ -332,20 +332,40 @@ async function withRetry(fn, { tries = 3, label = '', onWait = null } = {}) {
 
 async function cmdGenerate(flags) {
   const layer = loadLayer();
-  const sf = await import('../build/siliconflow.mjs');
   const plan = buildArtPlan({ layer, log: () => {} });
+  const providers = {
+    aliyun: {
+      label: '阿里云百炼（Model Studio / Token Plan）', mod: await import('../build/aliyun.mjs'),
+      keyEnv: 'ALIYUN_API_KEY', hint: 'ALIYUN_API_KEY（写进 nailong/.env，已被 .gitignore 忽略）',
+      // 万相用 1K/2K 档位；qwen-image 用 W*H 像素串 —— 交给模块自己判断
+      pickSize: (t) => (String(process.env.ALIYUN_MODEL ?? '').startsWith('wan')
+        ? '2K' : sf.pickSize(t.info?.width, t.info?.height)),
+      metered: true,
+    },
+    siliconflow: {
+      label: 'SiliconFlow', mod: await import('../build/siliconflow.mjs'),
+      keyEnv: 'SF_API_KEY', hint: 'SF_API_KEY（写进 nailong/.env）',
+      pickSize: (t) => null, metered: false,
+    },
+  };
+  // 默认选哪个：给了 --provider 就用它；否则看 .env/环境变量里先配好了哪个（aliyun 优先，成本高所以更保守）
+  let provider = flags.provider;
+  if (!provider) {
+    const probeCtx = { repoRoot: layer.repoRoot, layerDir: layer.layerDir };
+    provider = providers.aliyun.mod.resolveKey(probeCtx).key ? 'aliyun'
+      : providers.siliconflow.mod.resolveKey(probeCtx).key ? 'siliconflow' : 'aliyun';
+  }
+  if (!providers[provider]) { console.error(C.bad + `未知 provider "${provider}"（aliyun | siliconflow）` + C.off); process.exit(2); }
+  const P = providers[provider];
+  const sf = P.mod;
   const { key, from } = sf.resolveKey({ repoRoot: layer.repoRoot, layerDir: layer.layerDir });
   if (!key) {
-    console.error(C.bad + '没有 SiliconFlow API key。' + C.off);
-    console.error('  PowerShell:  $env:SF_API_KEY = "sk-..."');
-    console.error('  或写进 nailong/.env（已被 .gitignore 忽略）: SF_API_KEY=sk-...');
+    console.error(C.bad + `没有 ${P.label} 的 API key（${P.keyEnv}）。` + C.off);
+    console.error('  写进 nailong/.env，例如：' + P.keyEnv + '=…');
     process.exit(2);
   }
-
-  const model = flags.model ?? sf.DEFAULT_MODEL;
+  const model = flags.model ?? process.env.ALIYUN_MODEL ?? sf.DEFAULT_MODEL;
   const useRef = flags.ref !== false && flags['no-ref'] !== true;
-  const provider = flags.provider ?? 'siliconflow';
-  if (provider !== 'siliconflow') { console.error(C.bad + `暂不支持 provider=${provider}` + C.off); process.exit(2); }
   if (useRef && !sf.modelSupportsRef(model)) {
     console.error(C.bad + `模型 ${model} 不支持参考图。换 Qwen/Qwen-Image-Edit 系列，或加 --no-ref（纯文生图）。` + C.off);
     process.exit(2);
@@ -356,21 +376,60 @@ async function cmdGenerate(flags) {
   const todo = list.filter((t) => !fs.existsSync(path.join(workOut, ...t.rel.split('/'))) || flags.force);
   const skipped = list.length - todo.length;
 
-  // 安全阀：没给 --limit 也没 --yes 时只跑 10 张，避免一条命令刷掉一整类
-  const explicit = flags.limit != null || flags.yes === true;
-  const batch = explicit ? todo : todo.slice(0, 10);
+  // ── 额度闸门 ──────────────────────────────────────────────────────────────
+  // 计费接口（阿里云按张计费）**默认只出 dry-run**：没有 --yes 就绝不真的调用。
+  // 即使给了 --yes，单次也有张数硬上限（--max，默认 5），防止一条命令刷掉一整类。
+  const MAX_PER_RUN = Number(flags.max ?? 5);
+  const count = flags.limit != null ? Number(flags.limit) : todo.length;
+  if (!Number.isFinite(count) || count < 0) { console.error(C.bad + '--limit 要是非负整数' + C.off); process.exit(2); }
+  if (count > MAX_PER_RUN) {
+    console.error(C.bad + `\n本次要生成 ${count} 张，超过单次硬上限 ${MAX_PER_RUN} 张。` + C.off);
+    console.error(`  ${P.label} 是**按张计费**的接口，成本高，所以要显式抬上限：`);
+    console.error(`    先小批量试：  ... --limit ${MAX_PER_RUN} --yes`);
+    console.error(`    确实要更多：  ... --limit ${count} --max ${count} --yes`);
+    process.exit(3);
+  }
+  const batch = todo.slice(0, count);
 
   console.log('');
-  console.log(C.hi + 'SiliconFlow 生成' + C.off);
+  console.log(C.hi + P.label + ' 生成' + C.off);
   console.log(`  key      ${key.slice(0, 6)}…${key.slice(-4)}（来自 ${from}）`);
   console.log(`  模型     ${model}${useRef ? '  ' + dim('（带参考图 img2img）') : '  ' + dim('（纯文生图）')}`);
   console.log(`  选中     ${list.length} 个目标（已有产物跳过 ${skipped}）`);
-  console.log(`  本次生成 ${batch.length} 张` + (explicit ? '' : C.warn + '   ← 未给 --limit/--yes，默认只跑 10 张试水' + C.off));
+  console.log(`  本次生成 ${batch.length} 张` + (P.metered ? C.warn + '   ← 按张计费' + C.off : ''));
   if (!batch.length) { console.log('\n没有要生成的。'); return; }
+
+  // dry-run 先于额度总闸：它不发任何请求，所以不需要 --yes
   if (flags['dry-run']) {
-    for (const t of batch.slice(0, 10)) console.log(`  · ${t.id}  → ${sf.pickSize(t.info?.width, t.info?.height)}`);
+    const sizeOf = P.pickSize;
+    for (const t of batch.slice(0, 10)) console.log(`  · ${t.id}  → ${sizeOf(t)}`);
     if (batch.length > 10) console.log(`  … 另外 ${batch.length - 10} 个`);
-    console.log('\n--dry-run：没有真的调用接口。');
+    // 把**真实会发出去的请求体**打出来（参考图用占位符代替，避免刷屏）
+    if (typeof sf.buildRequest === 'function' && batch[0]) {
+      const t = batch[0];
+      try {
+        const req = sf.buildRequest({
+          model, prompt: t.prompt, negative: plan.style.negative,
+          refPaths: useRef ? [t.src] : [], size: sizeOf(t),
+          seed: flags.seed != null ? Number(flags.seed) : undefined,
+        }, { summarize: true });
+        console.log('\n  实际请求（以第一个目标为例，参考图已省略）');
+        console.log('  ' + dim('POST ' + req.url));
+        console.log('  ' + JSON.stringify(req.body, null, 1).replace(/\n/g, '\n  '));
+      } catch (e) { console.log(C.warn + '  组装请求失败：' + e.message + C.off); }
+    }
+    console.log('\n' + C.ok + '--dry-run：没有发出任何请求，没有消耗额度。' + C.off);
+    return;
+  }
+
+  // ── 额度总闸：计费接口没有 --yes 就绝不发请求 ──────────────────────────────
+  if (P.metered && flags.yes !== true) {
+    console.log('');
+    console.log(C.warn + '  ⚠ 这是按张计费的接口，没有 --yes 不会发出任何请求。' + C.off);
+    console.log('  先看清会发什么：  ... --limit ' + batch.length + ' --dry-run');
+    console.log('  确认后再出图：    ... --limit ' + batch.length + ' --yes');
+    console.log('');
+    console.log(dim('  （本次只做到这里，额度消耗 0）'));
     return;
   }
 
@@ -383,12 +442,15 @@ async function cmdGenerate(flags) {
   async function worker() {
     while (cursor < batch.length) {
       const t = batch[cursor++];
-      const size = sf.pickSize(t.info?.width, t.info?.height);
+      const size = P.pickSize(t);
       const out = path.join(workOut, ...t.rel.split('/'));
       try {
         const r = await withRetry(() => sf.generateImage({
           key, model, prompt: t.prompt, negative: plan.style.negative,
-          refPath: useRef ? t.src : undefined, size,
+          // 阿里云收 refPaths（数组），SiliconFlow 收 refPath（单个）—— 两个都给，各自取用
+          refPath: useRef ? t.src : undefined,
+          refPaths: useRef ? [t.src] : [],
+          size,
           steps: flags.steps != null ? Number(flags.steps) : undefined,
           guidance: flags.guidance != null ? Number(flags.guidance) : undefined,
           seed: flags.seed != null ? Number(flags.seed) : undefined,
