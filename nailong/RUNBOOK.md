@@ -247,6 +247,50 @@ node nailong/bin/art.mjs ingest
 
 **奶龙参考图**已入库：`nailong/art/ref/nailong.jpg`（284×273 JPEG）。
 
+### 4.5 ComfyUI 自定义节点（手动调参用）
+
+仓库里有三个节点，源码在 `nailong/comfy/nailong_character/`（**入库，不在 ComfyUI 目录里**）：
+
+| 节点 | 作用 |
+|---|---|
+| **奶龙 · 加载角色图片** | 下拉选干员（212 个，带中文名）+ 变体（立绘 / 精英2 / 头像 / spine 正背面）。**自动压平透明、自动放大到短边 512** |
+| **奶龙 · 加载参考图** | 从 `nailong/art/ref/` 选参考图 |
+| **奶龙 · 保存角色图片** | 缩回**原尺寸**并贴回**原始 alpha**，存成可直接进游戏的 PNG |
+
+```bash
+node nailong/build/export-plan.mjs    # ① 生成角色清单（节点下拉框的内容）
+node nailong/bin/comfy-install.mjs    # ② 复制进 custom_nodes + 写机器相关的 config.json
+# ③ ★ 重启 ComfyUI 后端（它不热加载自定义节点）
+```
+
+ComfyUI 不在默认位置时：`--comfyui <ComfyUI 根目录>` 或环境变量 `COMFYUI_DIR`。
+
+**验证加载成功**：
+
+```bash
+curl.exe -s http://127.0.0.1:8188/object_info/NailongLoadCharacter
+```
+
+**预期**：返回 JSON 里有 `NailongLoadCharacter` 键，`display_name` 是「奶龙 · 加载角色图片」，
+`input.required.character[0]` 有 212 项。返回空的 `{}` 就是没加载上（多半没重启）。
+
+**接线**：
+
+```
+[加载角色图片] ─图像─┐
+                     ├→ TextEncodeQwenImage21 的 images.image_1 / images.image_2
+[加载参考图]   ─图像─┘
+                       KSampler → VAEDecode → [保存角色图片]
+[加载角色图片] ─原始alpha──────────────────→ [保存角色图片].mask   ★ 别忘这条
+```
+
+保存节点的 `mask` 同时决定**输出尺寸**和**透明通道**；不接就只会存出比例不对的不透明图。
+
+> 节点在**加载时**读 `nailong/gen/art-plan.json`。重新导出清单后要重启 ComfyUI 才会刷新下拉框。
+> 排查：若下拉框为空，先确认 `nailong/gen/art-plan.json` 存在，再确认安装目录里的 `config.json` 指向正确仓库。
+
+---
+
 ## 5. ★ 踩过的坑
 每条都是**实测**撞出来的。症状 → 原因 → 解法。
 
